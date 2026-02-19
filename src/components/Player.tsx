@@ -108,10 +108,17 @@ export default function Player({
     d.scale += (target.scale - d.scale) * damping;
 
     if (d.scale > 1.02) {
-      const tx = -(d.x * 100 - 50) * (d.scale - 1);
-      const ty = -(d.y * 100 - 50) * (d.scale - 1);
+      // Clamp so we never pan past the video edges
+      const halfVisible = 0.5 / d.scale;
+      const cx = Math.max(halfVisible, Math.min(1 - halfVisible, d.x));
+      const cy = Math.max(halfVisible, Math.min(1 - halfVisible, d.y));
+
+      // scale(S) translate(tx,ty) → translate is applied first, then scale
+      // To center point (cx,cy) in the viewport: tx = (0.5 - cx) * 100%
+      const tx = (0.5 - cx) * 100;
+      const ty = (0.5 - cy) * 100;
       setZoomStyle({
-        transform: `scale(${d.scale.toFixed(3)}) translate(${(tx / d.scale).toFixed(2)}%, ${(ty / d.scale).toFixed(2)}%)`,
+        transform: `scale(${d.scale.toFixed(3)}) translate(${tx.toFixed(2)}%, ${ty.toFixed(2)}%)`,
         transformOrigin: 'center center',
       });
     } else {
