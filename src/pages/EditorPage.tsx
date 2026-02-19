@@ -2,8 +2,10 @@ import { useState, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDemo } from '../context/DemoContext'
 import Player from '../components/Player'
+import type { ZoomPoint } from '../components/Player'
 import DeviceFrame from '../components/DeviceFrame'
 import Timeline from '../components/Timeline'
+import type { ZoomKeyframe } from '../types'
 import { analyzeVideo } from '../engine/video-analyzer'
 import { downloadBlob, exportWithEffects } from '../engine/exporter'
 
@@ -14,6 +16,37 @@ const DEVICE_SIZES: Record<DeviceType, { width: number; height: number }> = {
   laptop: { width: 680, height: 425 },
   phone: { width: 280, height: 540 },
 };
+
+const ZOOM_SCALE = 1.5;
+const ZOOM_HOLD_SEC = 2.0;
+const ZOOM_EASE_SEC = 0.4;
+
+/** Convert manual zoom points into a sorted keyframe array for preview & export. */
+function zoomPointsToKeyframes(points: ZoomPoint[], duration: number): ZoomKeyframe[] {
+  if (points.length === 0) return [];
+
+  const sorted = [...points].sort((a, b) => a.timeSec - b.timeSec);
+  const keyframes: ZoomKeyframe[] = [];
+
+  for (const pt of sorted) {
+    const easeIn = Math.max(0, pt.timeSec - ZOOM_EASE_SEC);
+    const holdEnd = Math.min(duration, pt.timeSec + ZOOM_HOLD_SEC);
+    const easeOut = Math.min(duration, holdEnd + ZOOM_EASE_SEC);
+
+    // Ease in from no-zoom
+    keyframes.push({ timeSec: easeIn, x: pt.x, y: pt.y, scale: 1.0 });
+    // Zoomed in
+    keyframes.push({ timeSec: pt.timeSec, x: pt.x, y: pt.y, scale: ZOOM_SCALE });
+    // Hold
+    keyframes.push({ timeSec: holdEnd, x: pt.x, y: pt.y, scale: ZOOM_SCALE });
+    // Ease out
+    keyframes.push({ timeSec: easeOut, x: pt.x, y: pt.y, scale: 1.0 });
+  }
+
+  // Sort everything by time, dedup overlapping resets
+  keyframes.sort((a, b) => a.timeSec - b.timeSec);
+  return keyframes;
+}
 
 export default function EditorPage() {
   const navigate = useNavigate();
@@ -29,15 +62,24 @@ export default function EditorPage() {
 
   // Edit state
   const [cutSegments, setCutSegments] = useState<Set<number>>(new Set());
-  const [enableZoom, setEnableZoom] = useState(false);
   const [autoCutDead, setAutoCutDead] = useState(false);
   const [deviceFrame, setDeviceFrame] = useState<DeviceType>('none');
+
+  // Manual zoom points
+  const [zoomPoints, setZoomPoints] = useState<ZoomPoint[]>([]);
+  const [zoomEditMode, setZoomEditMode] = useState(false);
 
   // Export state
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
 
   const analysis = project?.analysis ?? null;
+
+  // Convert manual zoom points to keyframes for preview & export
+  const zoomKeyframes = useMemo(
+    () => zoomPointsToKeyframes(zoomPoints, videoDuration),
+    [zoomPoints, videoDuration],
+  );
 
   // Auto-cut: mark all dead segments as cut
   const effectiveCutSegments = useMemo(() => {
@@ -59,12 +101,8 @@ export default function EditorPage() {
       });
       dispatch({ type: 'SET_ANALYSIS', analysis: result });
 
-      // Auto-enable dead time cutting if there are dead segments
       const hasDead = result.segments.some((s) => s.type === 'dead');
       if (hasDead) setAutoCutDead(true);
-
-      // Auto-enable zoom if keyframes were found
-      if (result.zoomKeyframes.length > 0) setEnableZoom(true);
     } catch (err) {
       console.error('Analysis failed:', err);
     } finally {
@@ -84,6 +122,19 @@ export default function EditorPage() {
     });
   }, []);
 
+  const handleAddZoomPoint = useCallback((timeSec: number, x: number, y: number) => {
+    const id = `zp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setZoomPoints((prev) => [...prev, { id, timeSec, x, y }]);
+  }, []);
+
+  const handleRemoveZoomPoint = useCallback((id: string) => {
+    setZoomPoints((prev) => prev.filter((p) => p.id !== id));
+  }, []);
+
+  const handleClearZoomPoints = useCallback(() => {
+    setZoomPoints([]);
+  }, []);
+
   const handleExport = useCallback(async () => {
     if (!project || !analysis) return;
     setExporting(true);
@@ -93,8 +144,8 @@ export default function EditorPage() {
         videoUrl: project.videoUrl,
         segments: analysis.segments,
         cutSegments: effectiveCutSegments,
-        zoomKeyframes: enableZoom ? analysis.zoomKeyframes : [],
-        enableZoom,
+        zoomKeyframes: zoomKeyframes,
+        enableZoom: zoomPoints.length > 0,
         playbackSpeed: project.settings.playbackSpeed,
         onProgress: setExportProgress,
       });
@@ -104,7 +155,7 @@ export default function EditorPage() {
     } finally {
       setExporting(false);
     }
-  }, [project, analysis, effectiveCutSegments, enableZoom]);
+  }, [project, analysis, effectiveCutSegments, zoomKeyframes, zoomPoints.length]);
 
   const handleDownloadRaw = useCallback(() => {
     if (!project) return;
@@ -144,16 +195,24 @@ export default function EditorPage() {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
+  const formatTimePrecise = (sec: number) => {
+    if (!isFinite(sec)) return '0:00.0';
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    const ms = Math.floor((sec % 1) * 10);
+    return `${m}:${s.toString().padStart(2, '0')}.${ms}`;
+  };
+
   const deadCount = analysis?.segments.filter((s) => s.type === 'dead').length ?? 0;
-  const zoomCount = analysis?.zoomKeyframes.length ?? 0;
   const playerSize = DEVICE_SIZES[deviceFrame];
+  const sortedZoomPoints = [...zoomPoints].sort((a, b) => a.timeSec - b.timeSec);
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Edit & Export</h1>
         <p className="text-gray-500 mt-1">
-          Analyze your recording to auto-trim dead time and add zoom effects.
+          Analyze your recording, add zoom effects, and export.
         </p>
       </div>
 
@@ -195,8 +254,7 @@ export default function EditorPage() {
                 Smart Analysis
               </h3>
               <p className="text-sm text-gray-500 mb-4">
-                Scan your video to detect dead time and activity hotspots for
-                auto-trim and zoom effects.
+                Scan your video to detect dead time for auto-trim.
               </p>
               <button
                 onClick={handleAnalyze}
@@ -247,32 +305,9 @@ export default function EditorPage() {
                   <dt className="text-gray-500">Dead segments</dt>
                   <dd className="font-mono text-amber-600">{deadCount}</dd>
                 </div>
-                <div className="flex justify-between">
-                  <dt className="text-gray-500">Zoom keyframes</dt>
-                  <dd className="font-mono text-brand-600">{zoomCount}</dd>
-                </div>
               </dl>
 
-              <div className="pt-3 border-t border-gray-100 space-y-3">
-                {/* Zoom toggle */}
-                <label className="flex items-center justify-between cursor-pointer">
-                  <div>
-                    <div className="text-sm font-medium text-gray-700">Auto Zoom</div>
-                    <div className="text-xs text-gray-500">{zoomCount} keyframes detected</div>
-                  </div>
-                  <div className="relative">
-                    <input
-                      type="checkbox"
-                      checked={enableZoom}
-                      onChange={(e) => setEnableZoom(e.target.checked)}
-                      className="sr-only"
-                    />
-                    <div className={`w-10 h-6 rounded-full transition-colors ${enableZoom ? 'bg-brand-600' : 'bg-gray-200'}`}>
-                      <div className={`w-4 h-4 mt-1 rounded-full bg-white shadow transition-transform ${enableZoom ? 'translate-x-5' : 'translate-x-1'}`} />
-                    </div>
-                  </div>
-                </label>
-
+              <div className="pt-3 border-t border-gray-100">
                 <button
                   onClick={handleAnalyze}
                   disabled={analyzing}
@@ -283,6 +318,92 @@ export default function EditorPage() {
               </div>
             </div>
           )}
+
+          {/* Zoom Points */}
+          <div className={`bg-white rounded-xl border p-6 space-y-4 transition-colors ${
+            zoomEditMode ? 'border-brand-400 ring-2 ring-brand-100' : 'border-gray-200'
+          }`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">Zoom Points</h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {zoomEditMode
+                    ? 'Double-click on the video to add zoom'
+                    : 'Click Edit to place zoom points on the video'}
+                </p>
+              </div>
+              <button
+                onClick={() => setZoomEditMode(!zoomEditMode)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  zoomEditMode
+                    ? 'bg-brand-600 text-white hover:bg-brand-700'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                {zoomEditMode ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                    Editing
+                  </span>
+                ) : 'Edit'}
+              </button>
+            </div>
+
+            {/* Zoom points list */}
+            {sortedZoomPoints.length > 0 ? (
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {sortedZoomPoints.map((pt, idx) => (
+                  <div
+                    key={pt.id}
+                    className="flex items-center gap-2 px-2.5 py-1.5 bg-gray-50 rounded-lg group"
+                  >
+                    <span className="w-5 h-5 flex items-center justify-center rounded-full bg-brand-100 text-brand-700 text-[10px] font-bold shrink-0">
+                      {idx + 1}
+                    </span>
+                    <span className="text-xs font-mono text-gray-700 flex-1">
+                      {formatTimePrecise(pt.timeSec)}
+                    </span>
+                    <span className="text-[10px] text-gray-400">
+                      ({Math.round(pt.x * 100)}%, {Math.round(pt.y * 100)}%)
+                    </span>
+                    <button
+                      onClick={() => handleRemoveZoomPoint(pt.id)}
+                      className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center text-gray-400 hover:text-red-500 transition-all shrink-0"
+                      title="Remove zoom point"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-4 text-center">
+                <div className="text-gray-300 mb-2">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className="mx-auto">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    <line x1="11" y1="8" x2="11" y2="14" />
+                    <line x1="8" y1="11" x2="14" y2="11" />
+                  </svg>
+                </div>
+                <p className="text-xs text-gray-400">
+                  No zoom points yet
+                </p>
+              </div>
+            )}
+
+            {sortedZoomPoints.length > 0 && (
+              <button
+                onClick={handleClearZoomPoints}
+                className="w-full py-1.5 text-xs text-gray-400 hover:text-red-500 transition-colors"
+              >
+                Clear all zoom points
+              </button>
+            )}
+          </div>
 
           {/* Device Frame selector */}
           <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-3">
@@ -429,7 +550,10 @@ export default function EditorPage() {
             <Player
               videoUrl={project.videoUrl}
               playbackSpeed={project.settings.playbackSpeed}
-              zoomKeyframes={enableZoom && analysis ? analysis.zoomKeyframes : undefined}
+              zoomKeyframes={zoomPoints.length > 0 ? zoomKeyframes : undefined}
+              zoomEditMode={zoomEditMode}
+              zoomPoints={zoomPoints}
+              onZoomPointAdd={handleAddZoomPoint}
               width={playerSize.width}
               height={playerSize.height}
               onDurationLoaded={setVideoDuration}
