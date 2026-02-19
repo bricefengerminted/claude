@@ -377,6 +377,7 @@ export default function EditorPage() {
           <Player
             videoUrl={project.videoUrl}
             playbackSpeed={project.settings.playbackSpeed}
+            zoomKeyframes={enableZoom && analysis ? analysis.zoomKeyframes : undefined}
             width={720}
             height={450}
             onDurationLoaded={setVideoDuration}
