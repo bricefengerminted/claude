@@ -1,187 +1,139 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
-import type { RRWebEvent } from '../types'
+import { useRef, useState, useEffect, useCallback } from 'react'
 
 interface Props {
-  events: RRWebEvent[];
+  videoUrl: string;
+  playbackSpeed?: number;
   width?: number;
   height?: number;
   autoPlay?: boolean;
-  onFinish?: () => void;
+  onTimeUpdate?: (currentTime: number) => void;
+  onDurationLoaded?: (duration: number) => void;
 }
 
-/**
- * rrweb Replay Player component.
- *
- * Dynamically imports rrweb's Replayer class to avoid SSR issues
- * and renders the replay into a container div.
- */
 export default function Player({
-  events,
-  width = 800,
-  height = 500,
+  videoUrl,
+  playbackSpeed = 1.0,
+  width = 720,
+  height = 450,
   autoPlay = false,
-  onFinish,
+  onTimeUpdate,
+  onDurationLoaded,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const replayerRef = useRef<any>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [ready, setReady] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const progressInterval = useRef<number>();
+  const [currentTime, setCurrentTime] = useState(0);
 
-  const initReplayer = useCallback(async () => {
-    if (!containerRef.current || events.length < 2) return;
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.playbackRate = playbackSpeed;
+    }
+  }, [playbackSpeed]);
 
-    try {
-      // Clear previous
-      if (replayerRef.current) {
-        try { replayerRef.current.pause(); } catch {}
-        containerRef.current.innerHTML = '';
-      }
-
-      const { Replayer } = await import('rrweb');
-
-      const replayer = new Replayer(events as any, {
-        root: containerRef.current,
-        skipInactive: true,
-        showWarning: false,
-        showDebug: false,
-        liveMode: false,
-        insertStyleRules: [
-          // Hide any scrollbars for cleaner look
-          '*::-webkit-scrollbar { display: none !important; }',
-          '* { scrollbar-width: none !important; }',
-        ],
+  const handleLoadedMetadata = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    // webm files sometimes report Infinity duration; seek to fix it
+    if (!isFinite(video.duration)) {
+      video.currentTime = 1e10;
+      video.addEventListener('timeupdate', function fix() {
+        video.removeEventListener('timeupdate', fix);
+        video.currentTime = 0;
+        setDuration(video.duration);
+        onDurationLoaded?.(video.duration);
       });
-
-      replayerRef.current = replayer;
-
-      const totalDuration =
-        events[events.length - 1].timestamp - events[0].timestamp;
-      setDuration(totalDuration);
-      setReady(true);
-      setError(null);
-
-      // Auto-play if requested
-      if (autoPlay) {
-        setTimeout(() => {
-          replayer.play();
-          setIsPlaying(true);
-        }, 500);
-      }
-    } catch (err) {
-      console.error('Failed to initialize replayer:', err);
-      setError('Failed to load replay engine. Events may be invalid.');
+    } else {
+      setDuration(video.duration);
+      onDurationLoaded?.(video.duration);
     }
-  }, [events, autoPlay]);
+  }, [onDurationLoaded]);
 
-  useEffect(() => {
-    initReplayer();
-    return () => {
-      if (replayerRef.current) {
-        try { replayerRef.current.pause(); } catch {}
-      }
-      if (progressInterval.current) {
-        clearInterval(progressInterval.current);
-      }
-    };
-  }, [initReplayer]);
+  const handleTimeUpdate = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || !isFinite(video.duration)) return;
+    const time = video.currentTime;
+    setCurrentTime(time);
+    setProgress((time / video.duration) * 100);
+    onTimeUpdate?.(time);
+  }, [onTimeUpdate]);
 
-  // Track progress
-  useEffect(() => {
-    if (isPlaying && replayerRef.current) {
-      progressInterval.current = window.setInterval(() => {
-        try {
-          const meta = replayerRef.current.getMetaData();
-          const currentTime = replayerRef.current.getCurrentTime();
-          const totalTime = meta.totalTime;
-          setProgress((currentTime / totalTime) * 100);
+  const handleEnded = useCallback(() => {
+    setIsPlaying(false);
+    setProgress(100);
+  }, []);
 
-          if (currentTime >= totalTime) {
-            setIsPlaying(false);
-            setProgress(100);
-            clearInterval(progressInterval.current);
-            onFinish?.();
-          }
-        } catch {
-          // replayer may not be ready yet
-        }
-      }, 100);
-    }
-
-    return () => {
-      if (progressInterval.current) {
-        clearInterval(progressInterval.current);
-      }
-    };
-  }, [isPlaying, onFinish]);
-
-  const togglePlay = () => {
-    if (!replayerRef.current || !ready) return;
+  const togglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
 
     if (isPlaying) {
-      replayerRef.current.pause();
+      video.pause();
       setIsPlaying(false);
     } else {
       if (progress >= 99) {
-        // Restart from beginning
-        replayerRef.current.play(0);
+        video.currentTime = 0;
         setProgress(0);
-      } else {
-        replayerRef.current.resume();
       }
+      video.play();
       setIsPlaying(true);
     }
+  }, [isPlaying, progress]);
+
+  const handleProgressClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      const video = videoRef.current;
+      if (!video || !isFinite(video.duration)) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const pct = (e.clientX - rect.left) / rect.width;
+      video.currentTime = pct * video.duration;
+    },
+    [],
+  );
+
+  const formatTime = (sec: number) => {
+    if (!isFinite(sec)) return '0:00';
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
-  const formatTime = (ms: number) => {
-    const s = Math.floor(ms / 1000);
-    const m = Math.floor(s / 60);
-    const remaining = s % 60;
-    return `${m}:${remaining.toString().padStart(2, '0')}`;
-  };
-
-  if (events.length < 2) {
+  if (!videoUrl) {
     return (
       <div
         className="flex items-center justify-center bg-gray-100 rounded-lg border border-gray-200"
         style={{ width, height }}
       >
-        <p className="text-gray-400 text-sm">No recording to play</p>
+        <p className="text-gray-400 text-sm">No video to play</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-3">
-      {/* Replay container */}
+      {/* Video container */}
       <div
-        className="bg-white rounded-lg border border-gray-200 overflow-hidden relative"
+        className="bg-black rounded-lg border border-gray-200 overflow-hidden relative"
         style={{ width, height }}
       >
-        <div ref={containerRef} className="w-full h-full" />
-
-        {error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-red-50">
-            <p className="text-red-600 text-sm text-center px-4">{error}</p>
-          </div>
-        )}
-
-        {!ready && !error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-50">
-            <div className="animate-spin h-6 w-6 border-2 border-brand-600 border-t-transparent rounded-full" />
-          </div>
-        )}
+        <video
+          ref={videoRef}
+          src={videoUrl}
+          className="w-full h-full object-contain"
+          autoPlay={autoPlay}
+          onLoadedMetadata={handleLoadedMetadata}
+          onTimeUpdate={handleTimeUpdate}
+          onEnded={handleEnded}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+        />
       </div>
 
       {/* Controls */}
       <div className="flex items-center gap-3">
         <button
           onClick={togglePlay}
-          disabled={!ready}
-          className="w-10 h-10 flex items-center justify-center bg-brand-600 text-white rounded-full hover:bg-brand-700 disabled:opacity-50 transition-colors"
+          className="w-10 h-10 flex items-center justify-center bg-brand-600 text-white rounded-full hover:bg-brand-700 transition-colors"
         >
           {isPlaying ? (
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -196,15 +148,18 @@ export default function Player({
         </button>
 
         {/* Progress bar */}
-        <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+        <div
+          className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden cursor-pointer"
+          onClick={handleProgressClick}
+        >
           <div
             className="h-full bg-brand-600 rounded-full transition-all duration-100"
             style={{ width: `${progress}%` }}
           />
         </div>
 
-        <span className="text-xs text-gray-500 font-mono min-w-[4rem] text-right">
-          {formatTime((progress / 100) * duration)} / {formatTime(duration)}
+        <span className="text-xs text-gray-500 font-mono min-w-[5rem] text-right">
+          {formatTime(currentTime)} / {formatTime(duration)}
         </span>
       </div>
     </div>

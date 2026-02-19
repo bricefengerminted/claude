@@ -1,5 +1,32 @@
-// ---- rrweb event types (subset we need for enhancement) ----
+// ---- Video recording project types ----
 
+export interface TrimRange {
+  startSec: number;
+  endSec: number;
+}
+
+export interface VideoSettings {
+  playbackSpeed: number;   // 0.25 - 2.0
+  trim: TrimRange | null;  // null = no trimming
+}
+
+export const DEFAULT_VIDEO_SETTINGS: VideoSettings = {
+  playbackSpeed: 1.0,
+  trim: null,
+};
+
+export interface DemoProject {
+  id: string;
+  name: string;
+  videoUrl: string;        // object URL for the recorded blob
+  videoBlob: Blob;         // the raw recorded video
+  settings: VideoSettings;
+  createdAt: number;
+  duration: number;        // seconds
+}
+
+// Keep legacy types around so existing engine files don't break on import
+// (they're unused in the new video flow but avoids build errors)
 export enum EventType {
   DomContentLoaded = 0,
   Load = 1,
@@ -53,15 +80,13 @@ export interface RRWebEvent {
   timestamp: number;
 }
 
-// ---- App types ----
-
 export interface EnhancementSettings {
-  cursorSmoothing: number;   // 0-100, how much to smooth cursor paths
-  scrollSmoothing: number;   // 0-100, how much to smooth scrolling
-  playbackSpeed: number;     // 0.25 - 2.0
-  maxPauseMs: number;        // max pause between actions (ms)
-  clickHighlight: boolean;   // add visual click effects
-  autoZoom: boolean;         // zoom into areas of activity
+  cursorSmoothing: number;
+  scrollSmoothing: number;
+  playbackSpeed: number;
+  maxPauseMs: number;
+  clickHighlight: boolean;
+  autoZoom: boolean;
 }
 
 export const DEFAULT_SETTINGS: EnhancementSettings = {
@@ -72,13 +97,3 @@ export const DEFAULT_SETTINGS: EnhancementSettings = {
   clickHighlight: true,
   autoZoom: false,
 };
-
-export interface DemoProject {
-  id: string;
-  name: string;
-  rawEvents: RRWebEvent[];
-  enhancedEvents: RRWebEvent[] | null;
-  settings: EnhancementSettings;
-  createdAt: number;
-  duration: number;
-}

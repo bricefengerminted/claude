@@ -9,7 +9,7 @@ export default function Navbar() {
   const links = [
     { to: '/', label: 'Home' },
     { to: '/record', label: 'Record' },
-    { to: '/edit', label: 'Enhance & Export', disabled: !hasProject },
+    { to: '/edit', label: 'Preview & Export', disabled: !hasProject },
   ];
 
   return (

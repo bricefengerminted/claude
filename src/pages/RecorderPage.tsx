@@ -1,132 +1,151 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDemo } from '../context/DemoContext'
-import type { RRWebEvent } from '../types'
 
-type RecordingState = 'idle' | 'recording' | 'done';
+type RecordingState = 'idle' | 'recording' | 'preview';
 
 export default function RecorderPage() {
   const navigate = useNavigate();
   const { dispatch } = useDemo();
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const stopRecordingRef = useRef<(() => void) | null>(null);
-  const eventsRef = useRef<RRWebEvent[]>([]);
 
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
   const [elapsed, setElapsed] = useState(0);
-  const [eventCount, setEventCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const timerRef = useRef<number>();
 
-  // Tab state: 'demo' (built-in demo page) or 'upload' (JSON file)
-  const [activeTab, setActiveTab] = useState<'demo' | 'upload'>('demo');
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<number>();
+  const videoBlobRef = useRef<Blob | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
+  const videoPreviewRef = useRef<HTMLVideoElement>(null);
 
   const startRecording = useCallback(async () => {
     try {
-      const { record } = await import('rrweb');
-
-      eventsRef.current = [];
-      setEventCount(0);
-      setElapsed(0);
       setError(null);
+      chunksRef.current = [];
 
-      const stopFn = record({
-        emit: (event: any) => {
-          eventsRef.current.push(event);
-          setEventCount((c) => c + 1);
+      // Prompt user to pick a screen/window/tab
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          frameRate: 30,
         },
-        sampling: {
-          mousemove: true,
-          mouseInteraction: true,
-          scroll: 150,
-          input: 'last',
-        },
+        audio: true, // capture tab/system audio if available
       });
 
-      if (stopFn) {
-        stopRecordingRef.current = stopFn;
-      }
+      streamRef.current = stream;
 
+      // Detect if user stops sharing via the browser's built-in "Stop sharing" button
+      stream.getVideoTracks()[0].addEventListener('ended', () => {
+        finishRecording();
+      });
+
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+        ? 'video/webm;codecs=vp9'
+        : 'video/webm';
+
+      const recorder = new MediaRecorder(stream, {
+        mimeType,
+        videoBitsPerSecond: 8_000_000,
+      });
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+        videoBlobRef.current = blob;
+
+        // Clean up old preview URL
+        if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+        previewUrlRef.current = URL.createObjectURL(blob);
+
+        setRecordingState('preview');
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start(100); // collect chunks every 100ms
       setRecordingState('recording');
 
-      // Start timer
+      // Start elapsed timer
       const start = Date.now();
       timerRef.current = window.setInterval(() => {
         setElapsed(Date.now() - start);
       }, 100);
-    } catch (err) {
-      console.error('Failed to start recording:', err);
-      setError('Failed to initialize recording. Please try again.');
+    } catch (err: any) {
+      // User cancelled the screen picker or browser denied permission
+      if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
+        setError('Screen sharing was cancelled. Click "Start Recording" to try again.');
+      } else {
+        console.error('Failed to start recording:', err);
+        setError('Failed to start screen capture. Make sure your browser supports screen sharing.');
+      }
+    }
+  }, []);
+
+  const finishRecording = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = undefined;
+    }
+
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+    }
+    mediaRecorderRef.current = null;
+
+    // Stop all tracks
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
     }
   }, []);
 
   const stopRecording = useCallback(() => {
-    if (stopRecordingRef.current) {
-      stopRecordingRef.current();
-      stopRecordingRef.current = null;
-    }
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-    }
-    setRecordingState('done');
-  }, []);
+    finishRecording();
+  }, [finishRecording]);
 
   const saveAndContinue = useCallback(() => {
-    if (eventsRef.current.length < 5) {
-      setError('Recording too short. Please record for at least a few seconds.');
+    const blob = videoBlobRef.current;
+    if (!blob || blob.size === 0) {
+      setError('Recording is empty. Please try again.');
       return;
     }
+
+    // Get duration from the preview video element
+    const videoEl = videoPreviewRef.current;
+    const duration = videoEl && isFinite(videoEl.duration) ? videoEl.duration : elapsed / 1000;
+
     dispatch({
       type: 'CREATE_PROJECT',
-      name: `Demo ${new Date().toLocaleString()}`,
-      events: eventsRef.current,
+      name: `Recording ${new Date().toLocaleString()}`,
+      videoBlob: blob,
+      duration,
     });
     navigate('/edit');
-  }, [dispatch, navigate]);
-
-  const handleFileUpload = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = (evt) => {
-        try {
-          const events = JSON.parse(evt.target?.result as string);
-          if (!Array.isArray(events) || events.length < 2) {
-            setError('Invalid recording file. Expected an array of rrweb events.');
-            return;
-          }
-          dispatch({
-            type: 'CREATE_PROJECT',
-            name: file.name.replace('.json', ''),
-            events,
-          });
-          navigate('/edit');
-        } catch {
-          setError('Failed to parse file. Ensure it\'s valid JSON.');
-        }
-      };
-      reader.readAsText(file);
-    },
-    [dispatch, navigate],
-  );
+  }, [dispatch, navigate, elapsed]);
 
   const reset = useCallback(() => {
-    eventsRef.current = [];
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    videoBlobRef.current = null;
+    chunksRef.current = [];
     setRecordingState('idle');
     setElapsed(0);
-    setEventCount(0);
     setError(null);
   }, []);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (stopRecordingRef.current) stopRecordingRef.current();
-      if (timerRef.current) clearInterval(timerRef.current);
+      finishRecording();
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     };
-  }, []);
+  }, [finishRecording]);
 
   const formatTime = (ms: number) => {
     const s = Math.floor(ms / 1000);
@@ -136,36 +155,12 @@ export default function RecorderPage() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8">
+    <div className="max-w-4xl mx-auto px-4 py-8">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Record a Demo</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Record Your Screen</h1>
         <p className="text-gray-500 mt-1">
-          Interact with the demo page below, then we'll enhance the recording.
+          Capture any screen, window, or browser tab. Pick what to share when prompted.
         </p>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex border-b border-gray-200 mb-6">
-        <button
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'demo'
-              ? 'border-brand-600 text-brand-600'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
-          }`}
-          onClick={() => setActiveTab('demo')}
-        >
-          Record Demo Page
-        </button>
-        <button
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'upload'
-              ? 'border-brand-600 text-brand-600'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
-          }`}
-          onClick={() => setActiveTab('upload')}
-        >
-          Upload Recording
-        </button>
       </div>
 
       {error && (
@@ -174,152 +169,103 @@ export default function RecorderPage() {
         </div>
       )}
 
-      {activeTab === 'demo' ? (
-        <>
-          {/* Recording controls */}
-          <div className="flex items-center gap-4 mb-4">
-            {recordingState === 'idle' && (
-              <button
-                onClick={startRecording}
-                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors"
-              >
-                <span className="w-3 h-3 bg-white rounded-full" />
-                Start Recording
-              </button>
-            )}
+      {/* Controls */}
+      <div className="flex items-center gap-4 mb-6">
+        {recordingState === 'idle' && (
+          <button
+            onClick={startRecording}
+            className="flex items-center gap-2 px-5 py-2.5 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors"
+          >
+            <span className="w-3 h-3 bg-white rounded-full" />
+            Start Recording
+          </button>
+        )}
 
-            {recordingState === 'recording' && (
-              <>
-                <button
-                  onClick={stopRecording}
-                  className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
-                >
-                  <span className="w-3 h-3 bg-red-500 rounded recording-indicator" />
-                  Stop Recording
-                </button>
-                <div className="flex items-center gap-4 text-sm text-gray-500">
-                  <span className="font-mono">{formatTime(elapsed)}</span>
-                  <span>{eventCount} events captured</span>
-                </div>
-              </>
-            )}
+        {recordingState === 'recording' && (
+          <>
+            <button
+              onClick={stopRecording}
+              className="flex items-center gap-2 px-5 py-2.5 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+            >
+              <span className="w-3 h-3 bg-red-500 rounded-sm" />
+              Stop Recording
+            </button>
+            <div className="flex items-center gap-4 text-sm text-gray-500">
+              <span className="flex items-center gap-2">
+                <span className="w-2 h-2 bg-red-500 rounded-full recording-indicator" />
+                Recording
+              </span>
+              <span className="font-mono">{formatTime(elapsed)}</span>
+            </div>
+          </>
+        )}
 
-            {recordingState === 'done' && (
-              <>
-                <button
-                  onClick={saveAndContinue}
-                  className="px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 transition-colors"
-                >
-                  Enhance This Recording
-                </button>
-                <button
-                  onClick={reset}
-                  className="px-4 py-2 bg-gray-100 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors"
-                >
-                  Record Again
-                </button>
-                <div className="text-sm text-gray-500">
-                  {formatTime(elapsed)} recorded, {eventCount} events
-                </div>
-              </>
-            )}
+        {recordingState === 'preview' && (
+          <>
+            <button
+              onClick={saveAndContinue}
+              className="px-5 py-2.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 transition-colors"
+            >
+              Continue to Editor
+            </button>
+            <button
+              onClick={reset}
+              className="px-5 py-2.5 bg-gray-100 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors"
+            >
+              Record Again
+            </button>
+            <div className="text-sm text-gray-500">
+              {formatTime(elapsed)} recorded
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Recording status */}
+      {recordingState === 'recording' && (
+        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
+          <span className="w-2 h-2 bg-red-500 rounded-full recording-indicator" />
+          Recording your screen. Interact with your content, then click "Stop Recording" when finished.
+          You can also click the browser's "Stop sharing" button.
+        </div>
+      )}
+
+      {/* Preview area */}
+      {recordingState === 'idle' && (
+        <div className="border-2 border-dashed border-gray-300 rounded-xl bg-gray-50 flex flex-col items-center justify-center py-24">
+          <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
           </div>
+          <p className="text-gray-500 text-sm mb-1">No recording yet</p>
+          <p className="text-gray-400 text-xs">Click "Start Recording" and pick a screen, window, or tab</p>
+        </div>
+      )}
 
-          {/* Recording status bar */}
-          {recordingState === 'recording' && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
-              <span className="w-2 h-2 bg-red-500 rounded-full recording-indicator" />
-              Recording in progress. Interact with the page below, then click "Stop
-              Recording" when done.
+      {recordingState === 'recording' && (
+        <div className="border border-gray-200 rounded-xl bg-gray-900 flex items-center justify-center py-24">
+          <div className="text-center">
+            <div className="w-16 h-16 bg-red-600/20 rounded-full flex items-center justify-center mx-auto mb-4">
+              <span className="w-6 h-6 bg-red-500 rounded-full recording-indicator" />
             </div>
-          )}
-
-          {/* Demo page iframe */}
-          <div className="border border-gray-200 rounded-xl overflow-hidden bg-white shadow-sm">
-            <div className="bg-gray-100 px-4 py-2 flex items-center gap-2 border-b border-gray-200">
-              <div className="flex gap-1.5">
-                <div className="w-3 h-3 rounded-full bg-red-400" />
-                <div className="w-3 h-3 rounded-full bg-yellow-400" />
-                <div className="w-3 h-3 rounded-full bg-green-400" />
-              </div>
-              <div className="flex-1 mx-4">
-                <div className="bg-white rounded-md px-3 py-1 text-xs text-gray-400">
-                  flowboard.app
-                </div>
-              </div>
-            </div>
-            <iframe
-              ref={iframeRef}
-              src="/demo-content"
-              title="Demo content"
-              className="w-full border-0"
-              style={{ height: '600px' }}
-            />
+            <p className="text-white text-sm font-medium">Recording in progress...</p>
+            <p className="text-gray-400 text-xs mt-1 font-mono">{formatTime(elapsed)}</p>
           </div>
-        </>
-      ) : (
-        /* Upload tab */
-        <div className="bg-white rounded-xl border border-gray-200 p-8">
-          <div className="max-w-lg mx-auto text-center">
-            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="text-gray-400"
-              >
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                <polyline points="17 8 12 3 7 8" />
-                <line x1="12" y1="3" x2="12" y2="15" />
-              </svg>
-            </div>
-            <h3 className="font-semibold text-gray-900 mb-2">
-              Upload rrweb Recording
-            </h3>
-            <p className="text-sm text-gray-500 mb-6">
-              Upload a JSON file containing rrweb events from your own page.
-            </p>
-            <label className="inline-block px-6 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 cursor-pointer transition-colors">
-              Choose File
-              <input
-                type="file"
-                accept=".json"
-                className="hidden"
-                onChange={handleFileUpload}
-              />
-            </label>
+        </div>
+      )}
 
-            {/* Recording snippet */}
-            <div className="mt-8 text-left">
-              <h4 className="font-medium text-sm text-gray-900 mb-2">
-                How to record your own page
-              </h4>
-              <p className="text-xs text-gray-500 mb-3">
-                Add this snippet to your page, do the demo, then run{' '}
-                <code className="bg-gray-100 px-1 rounded">stopAndDownload()</code>{' '}
-                in the console:
-              </p>
-              <pre className="bg-gray-900 text-gray-100 text-xs p-4 rounded-lg overflow-x-auto">
-{`<script src="https://cdn.jsdelivr.net/npm/rrweb@latest/dist/record/rrweb-record.min.js"></script>
-<script>
-  let events = [];
-  rrwebRecord({ emit(e) { events.push(e); } });
-  window.stopAndDownload = () => {
-    const blob = new Blob([JSON.stringify(events)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'recording.json';
-    a.click();
-  };
-</script>`}
-              </pre>
-            </div>
-          </div>
+      {recordingState === 'preview' && previewUrlRef.current && (
+        <div className="border border-gray-200 rounded-xl overflow-hidden bg-black">
+          <video
+            ref={videoPreviewRef}
+            src={previewUrlRef.current}
+            controls
+            className="w-full"
+            style={{ maxHeight: '600px' }}
+          />
         </div>
       )}
     </div>

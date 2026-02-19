@@ -1,10 +1,5 @@
 import { createContext, useContext, useReducer, ReactNode } from 'react'
-import {
-  DemoProject,
-  RRWebEvent,
-  EnhancementSettings,
-  DEFAULT_SETTINGS,
-} from '../types'
+import { DemoProject, VideoSettings, DEFAULT_VIDEO_SETTINGS } from '../types'
 
 interface State {
   projects: DemoProject[];
@@ -12,10 +7,9 @@ interface State {
 }
 
 type Action =
-  | { type: 'CREATE_PROJECT'; name: string; events: RRWebEvent[] }
+  | { type: 'CREATE_PROJECT'; name: string; videoBlob: Blob; duration: number }
   | { type: 'SET_CURRENT'; id: string }
-  | { type: 'UPDATE_SETTINGS'; settings: Partial<EnhancementSettings> }
-  | { type: 'SET_ENHANCED_EVENTS'; events: RRWebEvent[] }
+  | { type: 'UPDATE_SETTINGS'; settings: Partial<VideoSettings> }
   | { type: 'DELETE_PROJECT'; id: string };
 
 const initialState: State = {
@@ -23,22 +17,17 @@ const initialState: State = {
   currentProject: null,
 };
 
-function computeDuration(events: RRWebEvent[]): number {
-  if (events.length < 2) return 0;
-  return events[events.length - 1].timestamp - events[0].timestamp;
-}
-
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'CREATE_PROJECT': {
       const project: DemoProject = {
         id: crypto.randomUUID(),
         name: action.name,
-        rawEvents: action.events,
-        enhancedEvents: null,
-        settings: { ...DEFAULT_SETTINGS },
+        videoBlob: action.videoBlob,
+        videoUrl: URL.createObjectURL(action.videoBlob),
+        settings: { ...DEFAULT_VIDEO_SETTINGS },
         createdAt: Date.now(),
-        duration: computeDuration(action.events),
+        duration: action.duration,
       };
       return {
         projects: [...state.projects, project],
@@ -54,21 +43,6 @@ function reducer(state: State, action: Action): State {
       const updated = {
         ...state.currentProject,
         settings: { ...state.currentProject.settings, ...action.settings },
-        enhancedEvents: null, // invalidate on settings change
-      };
-      return {
-        projects: state.projects.map((p) =>
-          p.id === updated.id ? updated : p
-        ),
-        currentProject: updated,
-      };
-    }
-    case 'SET_ENHANCED_EVENTS': {
-      if (!state.currentProject) return state;
-      const updated = {
-        ...state.currentProject,
-        enhancedEvents: action.events,
-        duration: computeDuration(action.events),
       };
       return {
         projects: state.projects.map((p) =>
@@ -78,6 +52,8 @@ function reducer(state: State, action: Action): State {
       };
     }
     case 'DELETE_PROJECT': {
+      const target = state.projects.find((p) => p.id === action.id);
+      if (target) URL.revokeObjectURL(target.videoUrl);
       const projects = state.projects.filter((p) => p.id !== action.id);
       return {
         projects,

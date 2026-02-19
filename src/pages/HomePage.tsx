@@ -11,9 +11,8 @@ export default function HomePage() {
           <span className="text-brand-600">polished product demos</span>
         </h1>
         <p className="text-xl text-gray-500 max-w-2xl mx-auto mb-8">
-          Record yourself using your product, and DemoReel automatically
-          smooths cursor movements, normalizes scrolling, and creates
-          marketing-ready demo videos.
+          Record any screen, window, or browser tab, then preview and
+          download a polished video ready for your marketing site or docs.
         </p>
         <div className="flex items-center justify-center gap-4">
           <Link
@@ -42,7 +41,7 @@ export default function HomePage() {
               step: '1',
               title: 'Record',
               description:
-                'Walk through your product naturally. Click around, scroll through features. Don\'t worry about being perfect.',
+                'Capture any screen, window, or browser tab. Walk through your product naturally — DemoReel records it all.',
               icon: (
                 <svg
                   width="24"
@@ -61,9 +60,9 @@ export default function HomePage() {
             },
             {
               step: '2',
-              title: 'Enhance',
+              title: 'Preview',
               description:
-                'Our engine smooths your cursor, normalizes scroll speed, removes awkward pauses, and adds professional pacing.',
+                'Review your recording instantly in the browser. Adjust playback speed and add a device frame for a polished look.',
               icon: (
                 <svg
                   width="24"
