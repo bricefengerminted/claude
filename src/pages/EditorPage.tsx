@@ -22,7 +22,7 @@ const ZOOM_EASE_SEC = 0.4;
 const DEFAULT_ZOOM_HOLD_SEC = 3.0;
 
 /** Convert manual zoom points into a sorted keyframe array for preview & export. */
-function zoomPointsToKeyframes(points: ZoomPoint[], duration: number, holdSec: number): ZoomKeyframe[] {
+function zoomPointsToKeyframes(points: ZoomPoint[], duration: number): ZoomKeyframe[] {
   if (points.length === 0) return [];
 
   const sorted = [...points].sort((a, b) => a.timeSec - b.timeSec);
@@ -30,7 +30,7 @@ function zoomPointsToKeyframes(points: ZoomPoint[], duration: number, holdSec: n
 
   for (const pt of sorted) {
     const easeIn = Math.max(0, pt.timeSec - ZOOM_EASE_SEC);
-    const holdEnd = Math.min(duration, pt.timeSec + holdSec);
+    const holdEnd = Math.min(duration, pt.timeSec + pt.holdSec);
     const easeOut = Math.min(duration, holdEnd + ZOOM_EASE_SEC);
 
     // Ease in from no-zoom
@@ -68,7 +68,6 @@ export default function EditorPage() {
   // Manual zoom points
   const [zoomPoints, setZoomPoints] = useState<ZoomPoint[]>([]);
   const [zoomEditMode, setZoomEditMode] = useState(false);
-  const [zoomHoldSec, setZoomHoldSec] = useState(DEFAULT_ZOOM_HOLD_SEC);
 
   // Export state
   const [exporting, setExporting] = useState(false);
@@ -78,8 +77,8 @@ export default function EditorPage() {
 
   // Convert manual zoom points to keyframes for preview & export
   const zoomKeyframes = useMemo(
-    () => zoomPointsToKeyframes(zoomPoints, videoDuration, zoomHoldSec),
-    [zoomPoints, videoDuration, zoomHoldSec],
+    () => zoomPointsToKeyframes(zoomPoints, videoDuration),
+    [zoomPoints, videoDuration],
   );
 
   // Auto-cut: mark all dead segments as cut
@@ -125,7 +124,13 @@ export default function EditorPage() {
 
   const handleAddZoomPoint = useCallback((timeSec: number, x: number, y: number) => {
     const id = `zp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setZoomPoints((prev) => [...prev, { id, timeSec, x, y }]);
+    setZoomPoints((prev) => [...prev, { id, timeSec, x, y, holdSec: DEFAULT_ZOOM_HOLD_SEC }]);
+  }, []);
+
+  const handleUpdateZoomHold = useCallback((id: string, holdSec: number) => {
+    setZoomPoints((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, holdSec } : p)),
+    );
   }, []);
 
   const handleRemoveZoomPoint = useCallback((id: string) => {
@@ -352,31 +357,49 @@ export default function EditorPage() {
 
             {/* Zoom points list */}
             {sortedZoomPoints.length > 0 ? (
-              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+              <div className="space-y-2 max-h-[320px] overflow-y-auto">
                 {sortedZoomPoints.map((pt, idx) => (
                   <div
                     key={pt.id}
-                    className="flex items-center gap-2 px-2.5 py-1.5 bg-gray-50 rounded-lg group"
+                    className="bg-gray-50 rounded-lg group"
                   >
-                    <span className="w-5 h-5 flex items-center justify-center rounded-full bg-brand-100 text-brand-700 text-[10px] font-bold shrink-0">
-                      {idx + 1}
-                    </span>
-                    <span className="text-xs font-mono text-gray-700 flex-1">
-                      {formatTimePrecise(pt.timeSec)}
-                    </span>
-                    <span className="text-[10px] text-gray-400">
-                      ({Math.round(pt.x * 100)}%, {Math.round(pt.y * 100)}%)
-                    </span>
-                    <button
-                      onClick={() => handleRemoveZoomPoint(pt.id)}
-                      className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center text-gray-400 hover:text-red-500 transition-all shrink-0"
-                      title="Remove zoom point"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                        <line x1="18" y1="6" x2="6" y2="18" />
-                        <line x1="6" y1="6" x2="18" y2="18" />
-                      </svg>
-                    </button>
+                    <div className="flex items-center gap-2 px-2.5 py-1.5">
+                      <span className="w-5 h-5 flex items-center justify-center rounded-full bg-brand-100 text-brand-700 text-[10px] font-bold shrink-0">
+                        {idx + 1}
+                      </span>
+                      <span className="text-xs font-mono text-gray-700 flex-1">
+                        {formatTimePrecise(pt.timeSec)}
+                      </span>
+                      <span className="text-[10px] text-gray-400">
+                        ({Math.round(pt.x * 100)}%, {Math.round(pt.y * 100)}%)
+                      </span>
+                      <button
+                        onClick={() => handleRemoveZoomPoint(pt.id)}
+                        className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center text-gray-400 hover:text-red-500 transition-all shrink-0"
+                        title="Remove zoom point"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                          <line x1="18" y1="6" x2="6" y2="18" />
+                          <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                      </button>
+                    </div>
+                    {/* Per-point hold duration slider */}
+                    <div className="flex items-center gap-2 px-2.5 pb-2">
+                      <span className="text-[10px] text-gray-400 shrink-0 w-10">Hold</span>
+                      <input
+                        type="range"
+                        min={0.5}
+                        max={8}
+                        step={0.5}
+                        value={pt.holdSec}
+                        onChange={(e) => handleUpdateZoomHold(pt.id, Number(e.target.value))}
+                        className="flex-1 h-1 bg-gray-200 rounded-full appearance-none cursor-pointer accent-brand-600"
+                      />
+                      <span className="text-[10px] font-mono text-gray-500 shrink-0 w-7 text-right">
+                        {pt.holdSec.toFixed(1)}s
+                      </span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -395,27 +418,6 @@ export default function EditorPage() {
                 </p>
               </div>
             )}
-
-            {/* Zoom duration slider */}
-            <div className="pt-2 border-t border-gray-100 space-y-1.5">
-              <div className="flex justify-between items-center">
-                <span className="text-xs text-gray-500">Hold duration</span>
-                <span className="text-xs font-mono text-gray-700">{zoomHoldSec.toFixed(1)}s</span>
-              </div>
-              <input
-                type="range"
-                min={0.5}
-                max={8}
-                step={0.5}
-                value={zoomHoldSec}
-                onChange={(e) => setZoomHoldSec(Number(e.target.value))}
-                className="w-full h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer accent-brand-600"
-              />
-              <div className="flex justify-between text-[10px] text-gray-400">
-                <span>0.5s</span>
-                <span>8s</span>
-              </div>
-            </div>
 
             {sortedZoomPoints.length > 0 && (
               <button

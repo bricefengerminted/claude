@@ -6,6 +6,7 @@ export interface ZoomPoint {
   timeSec: number;
   x: number; // 0-1 normalized
   y: number; // 0-1 normalized
+  holdSec: number; // how long to hold the zoom
 }
 
 interface Props {
