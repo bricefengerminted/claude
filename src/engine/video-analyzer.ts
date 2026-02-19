@@ -17,8 +17,14 @@ const DEAD_THRESHOLD = 0.005;
 /** Minimum dead segment length in seconds to be worth cutting */
 const MIN_DEAD_DURATION = 1.5;
 
-/** Zoom scale for detected activity hotspots */
-const ZOOM_SCALE = 1.6;
+/** Zoom scale for detected activity hotspots (lower = subtler, less jarring) */
+const ZOOM_SCALE = 1.35;
+
+/** Minimum time (seconds) to hold a zoom target before moving to a new one */
+const ZOOM_HOLD_DURATION = 2.0;
+
+/** Max distance (normalized 0-1) to consider two hotspots as "same area" */
+const HOTSPOT_CLUSTER_RADIUS = 0.2;
 
 // ---- Helpers ----
 
@@ -175,23 +181,84 @@ function buildSegments(
   return merged;
 }
 
-/** Smooth zoom keyframes so the camera doesn't jump erratically. */
+/**
+ * Cluster raw zoom keyframes into stable "zoom holds".
+ * Instead of jumping to a new position every 0.5s, we:
+ * 1. Group nearby hotspots (within HOTSPOT_CLUSTER_RADIUS) into clusters
+ * 2. Each cluster produces a single zoom keyframe at the cluster centroid
+ * 3. Clusters must last at least ZOOM_HOLD_DURATION to become a keyframe
+ */
+function clusterZoomKeyframes(raw: ZoomKeyframe[]): ZoomKeyframe[] {
+  if (raw.length === 0) return [];
+
+  const clusters: { keyframes: ZoomKeyframe[]; centroidX: number; centroidY: number }[] = [];
+  let currentCluster: ZoomKeyframe[] = [raw[0]];
+  let cx = raw[0].x;
+  let cy = raw[0].y;
+
+  for (let i = 1; i < raw.length; i++) {
+    const kf = raw[i];
+    const dist = Math.sqrt((kf.x - cx) ** 2 + (kf.y - cy) ** 2);
+
+    if (dist <= HOTSPOT_CLUSTER_RADIUS) {
+      // Same area - add to current cluster and update running centroid
+      currentCluster.push(kf);
+      cx = currentCluster.reduce((s, k) => s + k.x, 0) / currentCluster.length;
+      cy = currentCluster.reduce((s, k) => s + k.y, 0) / currentCluster.length;
+    } else {
+      // New area - finalize current cluster
+      clusters.push({ keyframes: [...currentCluster], centroidX: cx, centroidY: cy });
+      currentCluster = [kf];
+      cx = kf.x;
+      cy = kf.y;
+    }
+  }
+  // Don't forget the last cluster
+  clusters.push({ keyframes: [...currentCluster], centroidX: cx, centroidY: cy });
+
+  // Convert clusters into stable zoom keyframes
+  const result: ZoomKeyframe[] = [];
+  for (const cluster of clusters) {
+    const kfs = cluster.keyframes;
+    const duration = kfs[kfs.length - 1].timeSec - kfs[0].timeSec;
+
+    // Only create zoom for clusters that last long enough (activity persists in one area)
+    if (duration >= ZOOM_HOLD_DURATION || kfs.length >= 4) {
+      // Zoom IN at the start of the cluster
+      result.push({
+        timeSec: kfs[0].timeSec,
+        x: cluster.centroidX,
+        y: cluster.centroidY,
+        scale: ZOOM_SCALE,
+      });
+      // Hold at centroid through the cluster
+      result.push({
+        timeSec: kfs[kfs.length - 1].timeSec,
+        x: cluster.centroidX,
+        y: cluster.centroidY,
+        scale: ZOOM_SCALE,
+      });
+    }
+  }
+
+  return result;
+}
+
+/** Smooth zoom keyframes with exponential moving average. */
 function smoothZoomKeyframes(raw: ZoomKeyframe[]): ZoomKeyframe[] {
   if (raw.length < 3) return raw;
 
+  const alpha = 0.3; // Lower = smoother
   const smoothed: ZoomKeyframe[] = [raw[0]];
-  for (let i = 1; i < raw.length - 1; i++) {
-    const prev = raw[i - 1];
-    const curr = raw[i];
-    const next = raw[i + 1];
+  for (let i = 1; i < raw.length; i++) {
+    const prev = smoothed[i - 1];
     smoothed.push({
-      timeSec: curr.timeSec,
-      x: prev.x * 0.25 + curr.x * 0.5 + next.x * 0.25,
-      y: prev.y * 0.25 + curr.y * 0.5 + next.y * 0.25,
-      scale: curr.scale,
+      timeSec: raw[i].timeSec,
+      x: prev.x * (1 - alpha) + raw[i].x * alpha,
+      y: prev.y * (1 - alpha) + raw[i].y * alpha,
+      scale: raw[i].scale,
     });
   }
-  smoothed.push(raw[raw.length - 1]);
   return smoothed;
 }
 
@@ -244,7 +311,7 @@ export async function analyzeVideo(
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
 
   const frameScores: { timeSec: number; changeScore: number }[] = [];
-  const rawZoomKeyframes: ZoomKeyframe[] = [];
+  const rawHotspots: ZoomKeyframe[] = [];
 
   // Extract first frame
   await seekTo(video, 0);
@@ -264,7 +331,7 @@ export async function analyzeVideo(
     if (changeScore > DEAD_THRESHOLD) {
       const hotspot = findHotspot(prevFrame, currentFrame);
       if (hotspot.maxChange > 0.02) {
-        rawZoomKeyframes.push({
+        rawHotspots.push({
           timeSec: t,
           x: hotspot.x,
           y: hotspot.y,
@@ -279,7 +346,10 @@ export async function analyzeVideo(
   }
 
   const segments = buildSegments(frameScores, totalDuration);
-  const zoomKeyframes = smoothZoomKeyframes(rawZoomKeyframes);
+
+  // Cluster → smooth → add ease-in/out resets
+  const clustered = clusterZoomKeyframes(rawHotspots);
+  const zoomKeyframes = smoothZoomKeyframes(clustered);
 
   // Add a "reset" keyframe at start and end so zoom eases in/out
   if (zoomKeyframes.length > 0) {
@@ -290,6 +360,27 @@ export async function analyzeVideo(
     if (last.timeSec < totalDuration - 0.5) {
       zoomKeyframes.push({ timeSec: totalDuration, x: 0.5, y: 0.5, scale: 1.0 });
     }
+
+    // Insert zoom-out resets between clusters that are far apart in time (>3s gap)
+    const withResets: ZoomKeyframe[] = [zoomKeyframes[0]];
+    for (let i = 1; i < zoomKeyframes.length; i++) {
+      const gap = zoomKeyframes[i].timeSec - zoomKeyframes[i - 1].timeSec;
+      if (gap > 3.0 && zoomKeyframes[i - 1].scale > 1.01 && zoomKeyframes[i].scale > 1.01) {
+        // Zoom out halfway through the gap, then zoom in for the next cluster
+        const midTime = zoomKeyframes[i - 1].timeSec + gap * 0.3;
+        const reZoomTime = zoomKeyframes[i].timeSec - gap * 0.3;
+        withResets.push({ timeSec: midTime, x: 0.5, y: 0.5, scale: 1.0 });
+        withResets.push({ timeSec: reZoomTime, x: 0.5, y: 0.5, scale: 1.0 });
+      }
+      withResets.push(zoomKeyframes[i]);
+    }
+
+    return {
+      segments,
+      zoomKeyframes: withResets,
+      totalDuration,
+      frameCount: frameIndex,
+    };
   }
 
   return {

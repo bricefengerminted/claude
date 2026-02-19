@@ -55,6 +55,8 @@ export default function Player({
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const zoomFrameRef = useRef<number>();
+  // Damped zoom state for smooth motion
+  const dampedRef = useRef({ x: 0.5, y: 0.5, scale: 1.0 });
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -67,30 +69,35 @@ export default function Player({
     }
   }, [playbackSpeed]);
 
-  // Zoom animation loop - runs on every animation frame for smooth transforms
+  // Zoom animation loop with damping for smooth camera motion
   const updateZoom = useCallback(() => {
     const video = videoRef.current;
     if (!video || !zoomKeyframes || zoomKeyframes.length === 0) {
       setZoomStyle({});
+      dampedRef.current = { x: 0.5, y: 0.5, scale: 1.0 };
       return;
     }
 
-    const zoom = interpolateZoom(zoomKeyframes, video.currentTime);
-    if (zoom.scale > 1.01) {
-      // Calculate translate to center the zoom on the hotspot
-      // At scale S, the visible area is 1/S of the total.
-      // We want the hotspot (zoom.x, zoom.y) to be at the center of the visible area.
-      const tx = -(zoom.x * 100 - 50) * (zoom.scale - 1);
-      const ty = -(zoom.y * 100 - 50) * (zoom.scale - 1);
+    const target = interpolateZoom(zoomKeyframes, video.currentTime);
+    const d = dampedRef.current;
+
+    // Exponential damping: lerp toward target each frame
+    const damping = 0.08; // Lower = smoother/slower camera
+    d.x += (target.x - d.x) * damping;
+    d.y += (target.y - d.y) * damping;
+    d.scale += (target.scale - d.scale) * damping;
+
+    if (d.scale > 1.02) {
+      const tx = -(d.x * 100 - 50) * (d.scale - 1);
+      const ty = -(d.y * 100 - 50) * (d.scale - 1);
       setZoomStyle({
-        transform: `scale(${zoom.scale}) translate(${tx / zoom.scale}%, ${ty / zoom.scale}%)`,
+        transform: `scale(${d.scale.toFixed(3)}) translate(${(tx / d.scale).toFixed(2)}%, ${(ty / d.scale).toFixed(2)}%)`,
         transformOrigin: 'center center',
-        transition: 'none',
       });
     } else {
       setZoomStyle({
         transform: 'scale(1)',
-        transition: 'transform 0.3s ease-out',
+        transition: 'transform 0.5s ease-out',
       });
     }
 
@@ -113,6 +120,7 @@ export default function Player({
   useEffect(() => {
     if (!zoomKeyframes || zoomKeyframes.length === 0) {
       setZoomStyle({});
+      dampedRef.current = { x: 0.5, y: 0.5, scale: 1.0 };
     }
   }, [zoomKeyframes]);
 
@@ -146,6 +154,7 @@ export default function Player({
     setIsPlaying(false);
     setProgress(100);
     setZoomStyle({});
+    dampedRef.current = { x: 0.5, y: 0.5, scale: 1.0 };
   }, []);
 
   const togglePlay = useCallback(() => {
@@ -159,6 +168,7 @@ export default function Player({
       if (progress >= 99) {
         video.currentTime = 0;
         setProgress(0);
+        dampedRef.current = { x: 0.5, y: 0.5, scale: 1.0 };
       }
       video.play();
       setIsPlaying(true);
@@ -172,8 +182,10 @@ export default function Player({
       const rect = e.currentTarget.getBoundingClientRect();
       const pct = (e.clientX - rect.left) / rect.width;
       video.currentTime = pct * video.duration;
-      // Update zoom immediately on seek
+      // Snap damped state to target on seek
       if (zoomKeyframes && zoomKeyframes.length > 0) {
+        const target = interpolateZoom(zoomKeyframes, video.currentTime);
+        dampedRef.current = { ...target };
         updateZoom();
       }
     },
@@ -201,7 +213,7 @@ export default function Player({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" style={{ width }}>
       {/* Video container - overflow hidden clips the zoomed video */}
       <div
         className="bg-black rounded-lg border border-gray-200 overflow-hidden relative"
@@ -232,7 +244,7 @@ export default function Player({
       <div className="flex items-center gap-3">
         <button
           onClick={togglePlay}
-          className="w-10 h-10 flex items-center justify-center bg-brand-600 text-white rounded-full hover:bg-brand-700 transition-colors"
+          className="w-10 h-10 flex items-center justify-center bg-brand-600 text-white rounded-full hover:bg-brand-700 transition-colors shrink-0"
         >
           {isPlaying ? (
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -257,7 +269,7 @@ export default function Player({
           />
         </div>
 
-        <span className="text-xs text-gray-500 font-mono min-w-[5rem] text-right">
+        <span className="text-xs text-gray-500 font-mono min-w-[5rem] text-right shrink-0">
           {formatTime(currentTime)} / {formatTime(duration)}
         </span>
       </div>

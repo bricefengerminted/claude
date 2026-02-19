@@ -2,9 +2,18 @@ import { useState, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDemo } from '../context/DemoContext'
 import Player from '../components/Player'
+import DeviceFrame from '../components/DeviceFrame'
 import Timeline from '../components/Timeline'
 import { analyzeVideo } from '../engine/video-analyzer'
 import { downloadBlob, exportWithEffects } from '../engine/exporter'
+
+type DeviceType = 'none' | 'laptop' | 'phone';
+
+const DEVICE_SIZES: Record<DeviceType, { width: number; height: number }> = {
+  none: { width: 720, height: 450 },
+  laptop: { width: 680, height: 425 },
+  phone: { width: 280, height: 540 },
+};
 
 export default function EditorPage() {
   const navigate = useNavigate();
@@ -22,6 +31,7 @@ export default function EditorPage() {
   const [cutSegments, setCutSegments] = useState<Set<number>>(new Set());
   const [enableZoom, setEnableZoom] = useState(false);
   const [autoCutDead, setAutoCutDead] = useState(false);
+  const [deviceFrame, setDeviceFrame] = useState<DeviceType>('none');
 
   // Export state
   const [exporting, setExporting] = useState(false);
@@ -136,6 +146,7 @@ export default function EditorPage() {
 
   const deadCount = analysis?.segments.filter((s) => s.type === 'dead').length ?? 0;
   const zoomCount = analysis?.zoomKeyframes.length ?? 0;
+  const playerSize = DEVICE_SIZES[deviceFrame];
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
@@ -273,6 +284,46 @@ export default function EditorPage() {
             </div>
           )}
 
+          {/* Device Frame selector */}
+          <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-3">
+            <h3 className="text-sm font-semibold text-gray-900">Device Frame</h3>
+            <div className="flex gap-2">
+              {([
+                { value: 'none', label: 'None', icon: (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                    <line x1="8" y1="21" x2="16" y2="21" />
+                    <line x1="12" y1="17" x2="12" y2="21" />
+                  </svg>
+                )},
+                { value: 'laptop', label: 'Laptop', icon: (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 16V7a2 2 0 00-2-2H6a2 2 0 00-2 2v9m16 0H4m16 0l1.28 2.55a1 1 0 01-.9 1.45H3.62a1 1 0 01-.9-1.45L4 16" />
+                  </svg>
+                )},
+                { value: 'phone', label: 'Phone', icon: (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+                    <line x1="12" y1="18" x2="12.01" y2="18" />
+                  </svg>
+                )},
+              ] as const).map(({ value, label, icon }) => (
+                <button
+                  key={value}
+                  onClick={() => setDeviceFrame(value)}
+                  className={`flex-1 flex flex-col items-center gap-1.5 py-2.5 px-2 rounded-lg border text-xs font-medium transition-colors ${
+                    deviceFrame === value
+                      ? 'border-brand-600 bg-brand-50 text-brand-700'
+                      : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+                  }`}
+                >
+                  {icon}
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Playback speed */}
           <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
             <h3 className="text-sm font-semibold text-gray-900">Playback Speed</h3>
@@ -373,16 +424,18 @@ export default function EditorPage() {
         </div>
 
         {/* Right: Preview */}
-        <div className="lg:col-span-2">
-          <Player
-            videoUrl={project.videoUrl}
-            playbackSpeed={project.settings.playbackSpeed}
-            zoomKeyframes={enableZoom && analysis ? analysis.zoomKeyframes : undefined}
-            width={720}
-            height={450}
-            onDurationLoaded={setVideoDuration}
-            onTimeUpdate={setCurrentTime}
-          />
+        <div className="lg:col-span-2 flex items-start justify-center">
+          <DeviceFrame type={deviceFrame}>
+            <Player
+              videoUrl={project.videoUrl}
+              playbackSpeed={project.settings.playbackSpeed}
+              zoomKeyframes={enableZoom && analysis ? analysis.zoomKeyframes : undefined}
+              width={playerSize.width}
+              height={playerSize.height}
+              onDurationLoaded={setVideoDuration}
+              onTimeUpdate={setCurrentTime}
+            />
+          </DeviceFrame>
         </div>
       </div>
     </div>
