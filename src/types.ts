@@ -15,18 +15,41 @@ export const DEFAULT_VIDEO_SETTINGS: VideoSettings = {
   trim: null,
 };
 
+// ---- Analysis types ----
+
+export interface VideoSegment {
+  startSec: number;
+  endSec: number;
+  type: 'active' | 'dead';
+  avgChangeScore: number; // 0-1
+}
+
+export interface ZoomKeyframe {
+  timeSec: number;
+  x: number;       // focus center x (0-1)
+  y: number;       // focus center y (0-1)
+  scale: number;   // 1.0 = no zoom, 2.0 = 2x
+}
+
+export interface AnalysisResult {
+  segments: VideoSegment[];
+  zoomKeyframes: ZoomKeyframe[];
+  totalDuration: number;
+  frameCount: number;
+}
+
 export interface DemoProject {
   id: string;
   name: string;
   videoUrl: string;        // object URL for the recorded blob
   videoBlob: Blob;         // the raw recorded video
   settings: VideoSettings;
+  analysis: AnalysisResult | null;
   createdAt: number;
   duration: number;        // seconds
 }
 
 // Keep legacy types around so existing engine files don't break on import
-// (they're unused in the new video flow but avoids build errors)
 export enum EventType {
   DomContentLoaded = 0,
   Load = 1,

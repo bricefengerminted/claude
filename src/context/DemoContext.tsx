@@ -1,5 +1,5 @@
 import { createContext, useContext, useReducer, ReactNode } from 'react'
-import { DemoProject, VideoSettings, DEFAULT_VIDEO_SETTINGS } from '../types'
+import { DemoProject, VideoSettings, AnalysisResult, DEFAULT_VIDEO_SETTINGS } from '../types'
 
 interface State {
   projects: DemoProject[];
@@ -10,6 +10,7 @@ type Action =
   | { type: 'CREATE_PROJECT'; name: string; videoBlob: Blob; duration: number }
   | { type: 'SET_CURRENT'; id: string }
   | { type: 'UPDATE_SETTINGS'; settings: Partial<VideoSettings> }
+  | { type: 'SET_ANALYSIS'; analysis: AnalysisResult }
   | { type: 'DELETE_PROJECT'; id: string };
 
 const initialState: State = {
@@ -26,6 +27,7 @@ function reducer(state: State, action: Action): State {
         videoBlob: action.videoBlob,
         videoUrl: URL.createObjectURL(action.videoBlob),
         settings: { ...DEFAULT_VIDEO_SETTINGS },
+        analysis: null,
         createdAt: Date.now(),
         duration: action.duration,
       };
@@ -43,6 +45,19 @@ function reducer(state: State, action: Action): State {
       const updated = {
         ...state.currentProject,
         settings: { ...state.currentProject.settings, ...action.settings },
+      };
+      return {
+        projects: state.projects.map((p) =>
+          p.id === updated.id ? updated : p
+        ),
+        currentProject: updated,
+      };
+    }
+    case 'SET_ANALYSIS': {
+      if (!state.currentProject) return state;
+      const updated = {
+        ...state.currentProject,
+        analysis: action.analysis,
       };
       return {
         projects: state.projects.map((p) =>
