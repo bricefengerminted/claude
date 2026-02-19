@@ -18,11 +18,11 @@ const DEVICE_SIZES: Record<DeviceType, { width: number; height: number }> = {
 };
 
 const ZOOM_SCALE = 1.5;
-const ZOOM_HOLD_SEC = 2.0;
 const ZOOM_EASE_SEC = 0.4;
+const DEFAULT_ZOOM_HOLD_SEC = 3.0;
 
 /** Convert manual zoom points into a sorted keyframe array for preview & export. */
-function zoomPointsToKeyframes(points: ZoomPoint[], duration: number): ZoomKeyframe[] {
+function zoomPointsToKeyframes(points: ZoomPoint[], duration: number, holdSec: number): ZoomKeyframe[] {
   if (points.length === 0) return [];
 
   const sorted = [...points].sort((a, b) => a.timeSec - b.timeSec);
@@ -30,7 +30,7 @@ function zoomPointsToKeyframes(points: ZoomPoint[], duration: number): ZoomKeyfr
 
   for (const pt of sorted) {
     const easeIn = Math.max(0, pt.timeSec - ZOOM_EASE_SEC);
-    const holdEnd = Math.min(duration, pt.timeSec + ZOOM_HOLD_SEC);
+    const holdEnd = Math.min(duration, pt.timeSec + holdSec);
     const easeOut = Math.min(duration, holdEnd + ZOOM_EASE_SEC);
 
     // Ease in from no-zoom
@@ -68,6 +68,7 @@ export default function EditorPage() {
   // Manual zoom points
   const [zoomPoints, setZoomPoints] = useState<ZoomPoint[]>([]);
   const [zoomEditMode, setZoomEditMode] = useState(false);
+  const [zoomHoldSec, setZoomHoldSec] = useState(DEFAULT_ZOOM_HOLD_SEC);
 
   // Export state
   const [exporting, setExporting] = useState(false);
@@ -77,8 +78,8 @@ export default function EditorPage() {
 
   // Convert manual zoom points to keyframes for preview & export
   const zoomKeyframes = useMemo(
-    () => zoomPointsToKeyframes(zoomPoints, videoDuration),
-    [zoomPoints, videoDuration],
+    () => zoomPointsToKeyframes(zoomPoints, videoDuration, zoomHoldSec),
+    [zoomPoints, videoDuration, zoomHoldSec],
   );
 
   // Auto-cut: mark all dead segments as cut
@@ -394,6 +395,27 @@ export default function EditorPage() {
                 </p>
               </div>
             )}
+
+            {/* Zoom duration slider */}
+            <div className="pt-2 border-t border-gray-100 space-y-1.5">
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-gray-500">Hold duration</span>
+                <span className="text-xs font-mono text-gray-700">{zoomHoldSec.toFixed(1)}s</span>
+              </div>
+              <input
+                type="range"
+                min={0.5}
+                max={8}
+                step={0.5}
+                value={zoomHoldSec}
+                onChange={(e) => setZoomHoldSec(Number(e.target.value))}
+                className="w-full h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer accent-brand-600"
+              />
+              <div className="flex justify-between text-[10px] text-gray-400">
+                <span>0.5s</span>
+                <span>8s</span>
+              </div>
+            </div>
 
             {sortedZoomPoints.length > 0 && (
               <button
