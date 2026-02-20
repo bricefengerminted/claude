@@ -11,8 +11,10 @@ export default function RecorderPage() {
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number>();
@@ -139,6 +141,63 @@ export default function RecorderPage() {
     setError(null);
   }, []);
 
+  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reset input so the same file can be re-selected
+    e.target.value = '';
+
+    if (!file.type.startsWith('video/')) {
+      setError('Please select a video file.');
+      return;
+    }
+
+    setError(null);
+    setUploading(true);
+
+    try {
+      // Extract duration by loading into a temporary video element
+      const url = URL.createObjectURL(file);
+      const duration = await new Promise<number>((resolve, reject) => {
+        const vid = document.createElement('video');
+        vid.preload = 'metadata';
+        vid.onloadedmetadata = () => {
+          if (isFinite(vid.duration)) {
+            resolve(vid.duration);
+            URL.revokeObjectURL(url);
+          } else {
+            // WebM sometimes reports Infinity until seeked
+            vid.currentTime = 1e10;
+            vid.ontimeupdate = () => {
+              vid.ontimeupdate = null;
+              vid.currentTime = 0;
+              resolve(vid.duration);
+              URL.revokeObjectURL(url);
+            };
+          }
+        };
+        vid.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error('Could not read video file.'));
+        };
+        vid.src = url;
+      });
+
+      dispatch({
+        type: 'CREATE_PROJECT',
+        name: file.name.replace(/\.[^.]+$/, ''),
+        videoBlob: file,
+        duration,
+      });
+      navigate('/edit');
+    } catch (err: any) {
+      setError(err.message || 'Failed to load video file.');
+    } finally {
+      setUploading(false);
+    }
+  }, [dispatch, navigate]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -230,6 +289,15 @@ export default function RecorderPage() {
         </div>
       )}
 
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="video/*"
+        className="hidden"
+        onChange={handleFileUpload}
+      />
+
       {/* Preview area */}
       {recordingState === 'idle' && (
         <div className="border-2 border-dashed border-gray-300 rounded-xl bg-gray-50 flex flex-col items-center justify-center py-24">
@@ -241,7 +309,39 @@ export default function RecorderPage() {
             </svg>
           </div>
           <p className="text-gray-500 text-sm mb-1">No recording yet</p>
-          <p className="text-gray-400 text-xs">Click "Start Recording" and pick a screen, window, or tab</p>
+          <p className="text-gray-400 text-xs mb-6">Click "Start Recording" and pick a screen, window, or tab</p>
+
+          <div className="flex items-center gap-3 text-xs text-gray-400">
+            <span className="h-px w-12 bg-gray-300" />
+            or
+            <span className="h-px w-12 bg-gray-300" />
+          </div>
+
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="mt-4 flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-colors disabled:opacity-50"
+          >
+            {uploading ? (
+              <>
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Loading...
+              </>
+            ) : (
+              <>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+                Upload a Video
+              </>
+            )}
+          </button>
+          <p className="mt-2 text-[11px] text-gray-400">MP4, WebM, MOV, or any browser-supported format</p>
         </div>
       )}
 
