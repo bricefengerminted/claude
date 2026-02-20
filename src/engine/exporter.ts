@@ -1,4 +1,54 @@
+import { FFmpeg } from '@ffmpeg/ffmpeg'
+import { toBlobURL, fetchFile } from '@ffmpeg/util'
 import type { VideoSegment, ZoomKeyframe } from '../types'
+
+let ffmpegInstance: FFmpeg | null = null;
+
+/** Get or create a singleton FFmpeg instance. */
+async function getFFmpeg(): Promise<FFmpeg> {
+  if (ffmpegInstance && ffmpegInstance.loaded) return ffmpegInstance;
+  const ffmpeg = new FFmpeg();
+  const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+  await ffmpeg.load({
+    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+  });
+  ffmpegInstance = ffmpeg;
+  return ffmpeg;
+}
+
+/**
+ * Convert a WebM blob to MP4 (H.264) using ffmpeg.wasm.
+ */
+export async function convertToMp4(
+  webmBlob: Blob,
+  onProgress?: (pct: number) => void,
+): Promise<Blob> {
+  const ffmpeg = await getFFmpeg();
+
+  ffmpeg.on('progress', ({ progress }) => {
+    onProgress?.(Math.round(progress * 100));
+  });
+
+  await ffmpeg.writeFile('input.webm', await fetchFile(webmBlob));
+  await ffmpeg.exec([
+    '-i', 'input.webm',
+    '-c:v', 'libx264',
+    '-preset', 'fast',
+    '-crf', '23',
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
+    'output.mp4',
+  ]);
+  const data = await ffmpeg.readFile('output.mp4') as Uint8Array;
+  await ffmpeg.deleteFile('input.webm');
+  await ffmpeg.deleteFile('output.mp4');
+
+  // Copy into a standard ArrayBuffer to satisfy Blob constructor typing
+  const buf = new Uint8Array(data.length);
+  buf.set(data);
+  return new Blob([buf], { type: 'video/mp4' });
+}
 
 /**
  * Download a blob as a file.

@@ -7,7 +7,7 @@ import DeviceFrame from '../components/DeviceFrame'
 import Timeline from '../components/Timeline'
 import type { ZoomKeyframe } from '../types'
 import { analyzeVideo } from '../engine/video-analyzer'
-import { downloadBlob, exportWithEffects } from '../engine/exporter'
+import { downloadBlob, exportWithEffects, convertToMp4 } from '../engine/exporter'
 
 type DeviceType = 'none' | 'laptop' | 'phone';
 
@@ -141,25 +141,36 @@ export default function EditorPage() {
     setZoomPoints([]);
   }, []);
 
+  // Export status message for multi-step process
+  const [exportStatus, setExportStatus] = useState('');
+
   const handleExport = useCallback(async () => {
     if (!project || !analysis) return;
     setExporting(true);
     setExportProgress(0);
+    setExportStatus('Rendering video...');
     try {
-      const blob = await exportWithEffects({
+      const webmBlob = await exportWithEffects({
         videoUrl: project.videoUrl,
         segments: analysis.segments,
         cutSegments: effectiveCutSegments,
         zoomKeyframes: zoomKeyframes,
         enableZoom: zoomPoints.length > 0,
         playbackSpeed: project.settings.playbackSpeed,
-        onProgress: setExportProgress,
+        onProgress: (pct) => setExportProgress(Math.round(pct * 0.6)),
       });
-      downloadBlob(blob, `${project.name}-edited.webm`);
+
+      setExportStatus('Converting to MP4...');
+      const mp4Blob = await convertToMp4(webmBlob, (pct) => {
+        setExportProgress(60 + Math.round(pct * 0.4));
+      });
+
+      downloadBlob(mp4Blob, `${project.name}-edited.mp4`);
     } catch (err) {
       console.error('Export failed:', err);
     } finally {
       setExporting(false);
+      setExportStatus('');
     }
   }, [project, analysis, effectiveCutSegments, zoomKeyframes, zoomPoints.length]);
 
@@ -390,7 +401,7 @@ export default function EditorPage() {
                       <input
                         type="range"
                         min={0.5}
-                        max={8}
+                        max={Math.max(60, pt.holdSec)}
                         step={0.5}
                         value={pt.holdSec}
                         onChange={(e) => handleUpdateZoomHold(pt.id, Number(e.target.value))}
@@ -528,7 +539,7 @@ export default function EditorPage() {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
-                    Exporting... {exportProgress}%
+                    {exportStatus || 'Exporting...'} {exportProgress}%
                   </span>
                 ) : (
                   <>
@@ -537,7 +548,7 @@ export default function EditorPage() {
                       <polyline points="7 10 12 15 17 10" />
                       <line x1="12" y1="15" x2="12" y2="3" />
                     </svg>
-                    Export with Effects
+                    Export as MP4
                   </>
                 )}
               </button>
