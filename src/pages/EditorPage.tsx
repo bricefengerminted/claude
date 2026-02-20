@@ -395,21 +395,18 @@ export default function EditorPage() {
                         </svg>
                       </button>
                     </div>
-                    {/* Per-point hold duration slider */}
+                    {/* Per-point hold duration input */}
                     <div className="flex items-center gap-2 px-2.5 pb-2">
                       <span className="text-[10px] text-gray-400 shrink-0 w-10">Hold</span>
                       <input
-                        type="range"
+                        type="number"
                         min={0.5}
-                        max={Math.max(60, pt.holdSec)}
                         step={0.5}
                         value={pt.holdSec}
-                        onChange={(e) => handleUpdateZoomHold(pt.id, Number(e.target.value))}
-                        className="flex-1 h-1 bg-gray-200 rounded-full appearance-none cursor-pointer accent-brand-600"
+                        onChange={(e) => handleUpdateZoomHold(pt.id, Math.max(0.5, Number(e.target.value)))}
+                        className="flex-1 h-6 px-2 text-xs font-mono text-gray-700 bg-white border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500"
                       />
-                      <span className="text-[10px] font-mono text-gray-500 shrink-0 w-7 text-right">
-                        {pt.holdSec.toFixed(1)}s
-                      </span>
+                      <span className="text-[10px] text-gray-400 shrink-0">sec</span>
                     </div>
                   </div>
                 ))}
