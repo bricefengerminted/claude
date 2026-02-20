@@ -146,6 +146,10 @@ export async function exportWithEffects(
     }
     let processedDuration = 0;
 
+    // Damped zoom state to match the preview player's smooth transitions
+    const damped = { x: 0.5, y: 0.5, scale: 1.0 };
+    const DAMPING = 0.08;
+
     // Process each keep range
     for (let ri = 0; ri < keepRanges.length; ri++) {
       const range = keepRanges[ri];
@@ -155,6 +159,14 @@ export async function exportWithEffects(
       await new Promise<void>((r) => video.addEventListener('seeked', () => r(), { once: true }));
 
       video.playbackRate = playbackSpeed;
+
+      // Reset damped values to the target at seek point
+      if (enableZoom && zoomKeyframes.length > 0) {
+        const initial = interpolateZoom(zoomKeyframes, video.currentTime);
+        damped.x = initial.x;
+        damped.y = initial.y;
+        damped.scale = initial.scale;
+      }
 
       // Play this range and draw frames
       await new Promise<void>((rangeResolve) => {
@@ -169,12 +181,27 @@ export async function exportWithEffects(
           ctx.clearRect(0, 0, canvas.width, canvas.height);
 
           if (enableZoom && zoomKeyframes.length > 0) {
-            const zoom = interpolateZoom(zoomKeyframes, video.currentTime);
-            if (zoom.scale > 1.01) {
-              const s = zoom.scale;
-              // Translate so zoom centers on the hotspot
-              const tx = -(zoom.x * canvas.width) * (s - 1);
-              const ty = -(zoom.y * canvas.height) * (s - 1);
+            const target = interpolateZoom(zoomKeyframes, video.currentTime);
+
+            // Apply damping to match preview player
+            damped.x += (target.x - damped.x) * DAMPING;
+            damped.y += (target.y - damped.y) * DAMPING;
+            damped.scale += (target.scale - damped.scale) * DAMPING;
+
+            if (damped.scale > 1.02) {
+              const s = damped.scale;
+
+              // Clamp pan so we never show outside the video edges (matches preview)
+              const halfVisible = 0.5 / s;
+              const cx = Math.max(halfVisible, Math.min(1 - halfVisible, damped.x));
+              const cy = Math.max(halfVisible, Math.min(1 - halfVisible, damped.y));
+
+              // Center the zoom point on screen:
+              // We want point (cx*W, cy*H) to map to (W/2, H/2) after transform
+              // setTransform(s,0,0,s,tx,ty): x' = s*x + tx
+              // W/2 = s*(cx*W) + tx  →  tx = W*(0.5 - s*cx)
+              const tx = canvas.width * (0.5 - s * cx);
+              const ty = canvas.height * (0.5 - s * cy);
               ctx.setTransform(s, 0, 0, s, tx, ty);
             }
           }
