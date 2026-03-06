@@ -5,7 +5,7 @@ const { onRequest } = require("firebase-functions/v2/https");
  * The API key is sent from the client (stored in localStorage).
  */
 exports.anthropicProxy = onRequest(
-  { cors: true, region: "us-central1", memory: "256MiB" },
+  { cors: true, region: "us-central1", memory: "256MiB", invoker: "public" },
   async (req, res) => {
     if (req.method !== "POST") {
       res.status(405).json({ error: "Method not allowed" });
