@@ -5,8 +5,11 @@ import Player from '../components/Player'
 import type { ZoomPoint } from '../components/Player'
 import DeviceFrame from '../components/DeviceFrame'
 import Timeline from '../components/Timeline'
+import AISettings from '../components/AISettings'
 import type { ZoomKeyframe } from '../types'
 import { analyzeVideo } from '../engine/video-analyzer'
+import { aiAnalyzeVideo, type AICaption } from '../engine/ai-analyzer'
+import { getStoredApiKey, hasApiKey } from '../components/AISettings'
 import { downloadBlob, exportWithEffects, convertToMp4 } from '../engine/exporter'
 
 type DeviceType = 'none' | 'laptop' | 'phone';
@@ -69,6 +72,15 @@ export default function EditorPage() {
   const [zoomPoints, setZoomPoints] = useState<ZoomPoint[]>([]);
   const [zoomEditMode, setZoomEditMode] = useState(false);
 
+  // AI analysis state
+  const [aiAnalyzing, setAiAnalyzing] = useState(false);
+  const [aiProgress, setAiProgress] = useState(0);
+  const [aiStatus, setAiStatus] = useState('');
+  const [aiCaptions, setAiCaptions] = useState<AICaption[]>([]);
+  const [aiSummary, setAiSummary] = useState('');
+  const [aiError, setAiError] = useState('');
+  const [showAISettings, setShowAISettings] = useState(false);
+
   // Export state
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
@@ -109,6 +121,56 @@ export default function EditorPage() {
       setAnalyzing(false);
     }
   }, [project, dispatch]);
+
+  const handleAIAnalyze = useCallback(async () => {
+    if (!project) return;
+    const apiKey = getStoredApiKey();
+    if (!apiKey) {
+      setShowAISettings(true);
+      return;
+    }
+    setAiAnalyzing(true);
+    setAiProgress(0);
+    setAiError('');
+    setAiStatus('Starting...');
+    try {
+      const result = await aiAnalyzeVideo(project.videoUrl, apiKey, {
+        onProgress: setAiProgress,
+        onStatus: setAiStatus,
+      });
+
+      // Apply AI zoom keyframes as zoom points
+      const newPoints: ZoomPoint[] = result.zoomKeyframes
+        .filter((kf) => kf.scale > 1.05)
+        .reduce<ZoomPoint[]>((acc, kf) => {
+          // Skip duplicate positions (the ease-in frames)
+          const last = acc[acc.length - 1];
+          if (last && Math.abs(last.timeSec - kf.timeSec) < 0.5) return acc;
+          return [...acc, {
+            id: `ai-${kf.timeSec.toFixed(1)}-${Math.random().toString(36).slice(2, 5)}`,
+            timeSec: kf.timeSec,
+            x: kf.x,
+            y: kf.y,
+            holdSec: 3.0,
+          }];
+        }, []);
+
+      setZoomPoints(newPoints);
+      setAiCaptions(result.captions);
+      setAiSummary(result.summary);
+
+      // Also run regular analysis if not done yet (for timeline segments)
+      if (!analysis) {
+        handleAnalyze();
+      }
+    } catch (err: any) {
+      console.error('AI analysis failed:', err);
+      setAiError(err.message || 'AI analysis failed');
+    } finally {
+      setAiAnalyzing(false);
+      setAiStatus('');
+    }
+  }, [project, analysis, handleAnalyze]);
 
   const handleToggleCut = useCallback((index: number) => {
     setCutSegments((prev) => {
@@ -335,6 +397,103 @@ export default function EditorPage() {
               </div>
             </div>
           )}
+
+          {/* AI Analysis */}
+          <div className="bg-gradient-to-br from-violet-50 to-indigo-50 rounded-xl border border-violet-200 p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-violet-600">
+                    <path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93L12 22" />
+                    <path d="M12 2a4 4 0 0 0-4 4c0 1.95 1.4 3.58 3.25 3.93" />
+                    <path d="M8.56 13a8 8 0 0 0-2.3 4.29" />
+                    <path d="M15.44 13a8 8 0 0 1 2.3 4.29" />
+                  </svg>
+                  AI Smart Zoom
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Claude Vision analyzes your video and auto-generates zoom points
+                </p>
+              </div>
+              <button
+                onClick={() => setShowAISettings(true)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors"
+                title="AI Settings"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.32 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+              </button>
+            </div>
+
+            <button
+              onClick={handleAIAnalyze}
+              disabled={aiAnalyzing}
+              className="w-full py-2.5 px-4 bg-violet-600 text-white text-sm font-medium rounded-lg hover:bg-violet-700 disabled:opacity-50 transition-colors"
+            >
+              {aiAnalyzing ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  {aiStatus || 'Analyzing...'} {aiProgress}%
+                </span>
+              ) : (
+                <span className="flex items-center justify-center gap-2">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <path d="M5 3l14 9-14 9V3z" />
+                  </svg>
+                  {hasApiKey() ? 'Analyze with AI' : 'Set API Key to Start'}
+                </span>
+              )}
+            </button>
+
+            {aiAnalyzing && (
+              <div className="h-1.5 bg-violet-200 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-violet-600 rounded-full transition-all duration-300"
+                  style={{ width: `${aiProgress}%` }}
+                />
+              </div>
+            )}
+
+            {aiError && (
+              <div className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                {aiError}
+              </div>
+            )}
+
+            {aiSummary && (
+              <div className="text-xs text-gray-600 bg-white/60 rounded-lg px-3 py-2">
+                <span className="font-medium text-gray-700">AI Summary:</span> {aiSummary}
+              </div>
+            )}
+
+            {aiCaptions.length > 0 && (
+              <div className="space-y-1">
+                <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                  Scene Captions
+                </h4>
+                <div className="max-h-[160px] overflow-y-auto space-y-1">
+                  {aiCaptions.map((cap, i) => (
+                    <div key={i} className="flex gap-2 text-xs bg-white/60 rounded px-2 py-1">
+                      <span className="font-mono text-violet-600 shrink-0">
+                        {Math.floor(cap.timeSec / 60)}:{Math.floor(cap.timeSec % 60).toString().padStart(2, '0')}
+                      </span>
+                      <span className="text-gray-600">{cap.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <p className="text-[10px] text-gray-400 leading-relaxed">
+              Uses Claude Haiku 4.5 Vision. ~$0.06-0.25 per video depending on length.
+              Your API key stays in your browser.
+            </p>
+          </div>
 
           {/* Zoom Points */}
           <div className={`bg-white rounded-xl border p-6 space-y-4 transition-colors ${
@@ -594,6 +753,10 @@ export default function EditorPage() {
           </DeviceFrame>
         </div>
       </div>
+
+      {showAISettings && (
+        <AISettings onClose={() => setShowAISettings(false)} />
+      )}
     </div>
   );
 }
