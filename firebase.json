@@ -13,6 +13,13 @@
     ],
     "rewrites": [
       {
+        "source": "/api/anthropic",
+        "function": {
+          "functionId": "anthropicProxy",
+          "region": "us-central1"
+        }
+      },
+      {
         "source": "/api/anthropic/**",
         "function": {
           "functionId": "anthropicProxy",
