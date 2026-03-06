@@ -80,6 +80,7 @@ export default function EditorPage() {
   const [aiSummary, setAiSummary] = useState('');
   const [aiError, setAiError] = useState('');
   const [showAISettings, setShowAISettings] = useState(false);
+  const [aiCameraKeyframes, setAiCameraKeyframes] = useState<ZoomKeyframe[]>([]);
 
   // Export state
   const [exporting, setExporting] = useState(false);
@@ -87,10 +88,12 @@ export default function EditorPage() {
 
   const analysis = project?.analysis ?? null;
 
-  // Convert manual zoom points to keyframes for preview & export
+  // Use AI camera path if available, otherwise manual zoom points
   const zoomKeyframes = useMemo(
-    () => zoomPointsToKeyframes(zoomPoints, videoDuration),
-    [zoomPoints, videoDuration],
+    () => aiCameraKeyframes.length > 0
+      ? aiCameraKeyframes
+      : zoomPointsToKeyframes(zoomPoints, videoDuration),
+    [aiCameraKeyframes, zoomPoints, videoDuration],
   );
 
   // Auto-cut: mark all dead segments as cut
@@ -139,23 +142,9 @@ export default function EditorPage() {
         onStatus: setAiStatus,
       });
 
-      // Apply AI zoom keyframes as zoom points
-      const newPoints: ZoomPoint[] = result.zoomKeyframes
-        .filter((kf) => kf.scale > 1.05)
-        .reduce<ZoomPoint[]>((acc, kf) => {
-          // Skip duplicate positions (the ease-in frames)
-          const last = acc[acc.length - 1];
-          if (last && Math.abs(last.timeSec - kf.timeSec) < 0.5) return acc;
-          return [...acc, {
-            id: `ai-${kf.timeSec.toFixed(1)}-${Math.random().toString(36).slice(2, 5)}`,
-            timeSec: kf.timeSec,
-            x: kf.x,
-            y: kf.y,
-            holdSec: 3.0,
-          }];
-        }, []);
-
-      setZoomPoints(newPoints);
+      // Use the AI camera path directly — don't convert to zoom points
+      setAiCameraKeyframes(result.zoomKeyframes);
+      setZoomPoints([]); // Clear any manual zoom points
       setAiCaptions(result.captions);
       setAiSummary(result.summary);
 
@@ -217,7 +206,7 @@ export default function EditorPage() {
         segments: analysis.segments,
         cutSegments: effectiveCutSegments,
         zoomKeyframes: zoomKeyframes,
-        enableZoom: zoomPoints.length > 0,
+        enableZoom: aiCameraKeyframes.length > 0 || zoomPoints.length > 0,
         playbackSpeed: project.settings.playbackSpeed,
         onProgress: (pct) => setExportProgress(Math.round(pct * 0.6)),
       });
@@ -469,6 +458,15 @@ export default function EditorPage() {
               <div className="text-xs text-gray-600 bg-white/60 rounded-lg px-3 py-2">
                 <span className="font-medium text-gray-700">AI Summary:</span> {aiSummary}
               </div>
+            )}
+
+            {aiCameraKeyframes.length > 0 && (
+              <button
+                onClick={() => { setAiCameraKeyframes([]); setAiCaptions([]); setAiSummary(''); }}
+                className="w-full py-1.5 text-xs text-gray-400 hover:text-red-500 transition-colors"
+              >
+                Clear AI camera path
+              </button>
             )}
 
             {aiCaptions.length > 0 && (
@@ -741,7 +739,7 @@ export default function EditorPage() {
             <Player
               videoUrl={project.videoUrl}
               playbackSpeed={project.settings.playbackSpeed}
-              zoomKeyframes={zoomPoints.length > 0 ? zoomKeyframes : undefined}
+              zoomKeyframes={aiCameraKeyframes.length > 0 || zoomPoints.length > 0 ? zoomKeyframes : undefined}
               zoomEditMode={zoomEditMode}
               zoomPoints={zoomPoints}
               onZoomPointAdd={handleAddZoomPoint}
