@@ -170,11 +170,18 @@ function buildUserPrompt(
   return content;
 }
 
+function getApiUrl(): string {
+  // In dev, the Vite proxy rewrites /api/anthropic/* to api.anthropic.com/*
+  // In production, Firebase Function handles /api/anthropic/* directly
+  const isDev = import.meta.env.DEV;
+  return isDev ? '/api/anthropic/v1/messages' : '/api/anthropic';
+}
+
 async function callClaude(
   apiKey: string,
   userContent: any[],
 ): Promise<string> {
-  const response = await fetch('/api/anthropic/v1/messages', {
+  const response = await fetch(getApiUrl(), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
