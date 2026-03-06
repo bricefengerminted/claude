@@ -490,7 +490,7 @@ export default function EditorPage() {
             )}
 
             <p className="text-[10px] text-gray-400 leading-relaxed">
-              Uses Claude Haiku 4.5 Vision. ~$0.06-0.25 per video depending on length.
+              Uses Claude Sonnet 4.6 Vision. ~$0.10-0.50 per video depending on length.
               Your API key stays in your browser.
             </p>
           </div>

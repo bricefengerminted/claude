@@ -111,26 +111,29 @@ async function extractFrames(
 
 // ---- Claude Vision API ----
 
-const SYSTEM_PROMPT = `You are analyzing screenshots from a screen recording of a product demo. Your job is to identify the KEY MOMENTS where a viewer's attention should be directed, and generate smooth, professional zoom animations.
+const SYSTEM_PROMPT = `You are a professional video editor analyzing a screen recording. Your job is to identify the 1-3 MOST IMPORTANT moments that deserve a zoom close-up. Less is more — a video with zero zooms is better than one with too many.
 
-Rules for zoom targeting:
-- Only zoom into areas with meaningful activity (button clicks, form fills, important UI changes, navigation)
+CRITICAL RULES:
+- BE EXTREMELY SELECTIVE. Most frames should NOT get a zoom.
+- For videos under 30 seconds: maximum 1-2 zoom moments
+- For videos 30-60 seconds: maximum 2-3 zoom moments
+- For videos over 60 seconds: maximum 3-5 zoom moments
+- Only zoom when there is a CLEAR focal point worth highlighting (a specific button being clicked, a specific form field being filled, a key result appearing)
+- Do NOT zoom for: page loads, scrolling, mouse movement, typing in large text areas, or general navigation
+- Do NOT zoom into the same general area twice in a row
 - Use normalized coordinates (0-1 range): x=0 is left edge, x=1 is right edge, y=0 is top, y=1 is bottom
-- Don't zoom into every frame — only when there's something worth highlighting
-- Leave scale at 1.0 for overview/context shots between zoom moments
-- Use scale 1.3-1.5 for subtle emphasis, 1.6-2.0 for detailed close-ups
-- Ensure smooth transitions: don't jump between distant points without a zoom-out in between
-- Each zoom should hold for 2-4 seconds minimum before transitioning
+- Use scale 1.3-1.5 for subtle emphasis (preferred), 1.6-2.0 only for tiny UI elements
+- If nothing particularly interesting happens, return an EMPTY scenes array — that's perfectly fine
 
 Return ONLY valid JSON (no markdown, no backticks) with this exact structure:
 {
   "scenes": [
     {
-      "timeSec": 0,
-      "x": 0.5,
-      "y": 0.5,
-      "scale": 1.0,
-      "caption": "Overview of the dashboard"
+      "timeSec": 5.0,
+      "x": 0.3,
+      "y": 0.6,
+      "scale": 1.4,
+      "caption": "Clicking the submit button"
     }
   ],
   "summary": "Brief 1-sentence description of what the demo shows"
@@ -140,10 +143,11 @@ function buildUserPrompt(
   frames: { timeSec: number; dataUrl: string }[],
   duration: number,
 ): any[] {
+  const maxZooms = duration < 30 ? 2 : duration < 60 ? 3 : 5;
   const content: any[] = [
     {
       type: 'text',
-      text: `This is a ${Math.round(duration)}s screen recording with ${frames.length} frames captured at regular intervals. Analyze each frame and identify the important moments that should be zoomed into for a polished marketing-style demo video.\n\nFrames:`,
+      text: `This is a ${Math.round(duration)}s screen recording with ${frames.length} frames. Identify AT MOST ${maxZooms} moments worth zooming into. If nothing stands out, return zero scenes — that's fine. Be very selective.\n\nFrames:`,
     },
   ];
 
@@ -164,7 +168,7 @@ function buildUserPrompt(
 
   content.push({
     type: 'text',
-    text: `\nBased on these ${frames.length} frames spanning ${Math.round(duration)}s, generate the zoom keyframes and captions. Remember: return ONLY valid JSON, no markdown formatting.`,
+    text: `\nBased on these ${frames.length} frames spanning ${Math.round(duration)}s, generate AT MOST ${maxZooms} zoom scenes. Only zoom into truly important moments. Return ONLY valid JSON, no markdown formatting.`,
   });
 
   return content;
@@ -189,7 +193,7 @@ async function callClaude(
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-sonnet-4-6',
       max_tokens: 4096,
       system: SYSTEM_PROMPT,
       messages: [
@@ -231,13 +235,23 @@ function parseAIResponse(
   }
 
   const parsed = JSON.parse(cleaned);
-  const scenes: {
+  const maxZooms = duration < 30 ? 2 : duration < 60 ? 3 : 5;
+
+  // Hard cap: take only the top N scenes by scale (most confident zooms)
+  let scenes: {
     timeSec: number;
     x: number;
     y: number;
     scale: number;
     caption?: string;
   }[] = parsed.scenes ?? [];
+
+  if (scenes.length > maxZooms) {
+    scenes = [...scenes]
+      .sort((a, b) => (b.scale ?? 1) - (a.scale ?? 1))
+      .slice(0, maxZooms)
+      .sort((a, b) => a.timeSec - b.timeSec);
+  }
 
   // Build zoom keyframes with smooth transitions
   const zoomKeyframes: ZoomKeyframe[] = [];
