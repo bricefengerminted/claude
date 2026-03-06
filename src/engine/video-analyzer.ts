@@ -18,13 +18,13 @@ const DEAD_THRESHOLD = 0.005;
 const MIN_DEAD_DURATION = 1.5;
 
 /** Zoom scale for detected activity hotspots (lower = subtler, less jarring) */
-const ZOOM_SCALE = 1.35;
+const ZOOM_SCALE = 1.25;
 
 /** Minimum time (seconds) to hold a zoom target before moving to a new one */
-const ZOOM_HOLD_DURATION = 2.0;
+const ZOOM_HOLD_DURATION = 4.0;
 
 /** Max distance (normalized 0-1) to consider two hotspots as "same area" */
-const HOTSPOT_CLUSTER_RADIUS = 0.2;
+const HOTSPOT_CLUSTER_RADIUS = 0.35;
 
 // ---- Helpers ----
 
@@ -72,7 +72,10 @@ function compareFrames(a: ImageData, b: ImageData, threshold = 30): number {
   return changed / total;
 }
 
-/** Find the grid cell with the most pixel change (activity hotspot). */
+/** Minimum cell activity score to be included in the weighted centroid. */
+const CELL_ACTIVITY_THRESHOLD = 0.02;
+
+/** Find the weighted centroid of all active grid cells (not just the top one). */
 function findHotspot(
   a: ImageData,
   b: ImageData,
@@ -80,9 +83,9 @@ function findHotspot(
   const cellW = Math.floor(a.width / GRID_COLS);
   const cellH = Math.floor(a.height / GRID_ROWS);
   let maxChange = 0;
-  let hotX = 0.5;
-  let hotY = 0.5;
 
+  // First pass: compute per-cell scores
+  const cellScores: { col: number; row: number; score: number }[] = [];
   for (let row = 0; row < GRID_ROWS; row++) {
     for (let col = 0; col < GRID_COLS; col++) {
       let change = 0;
@@ -104,15 +107,28 @@ function findHotspot(
       }
 
       const score = change / count;
-      if (score > maxChange) {
-        maxChange = score;
-        hotX = (col + 0.5) / GRID_COLS;
-        hotY = (row + 0.5) / GRID_ROWS;
+      if (score > maxChange) maxChange = score;
+      if (score >= CELL_ACTIVITY_THRESHOLD) {
+        cellScores.push({ col, row, score });
       }
     }
   }
 
-  return { x: hotX, y: hotY, maxChange };
+  // Weighted centroid of all active cells
+  if (cellScores.length === 0) {
+    return { x: 0.5, y: 0.5, maxChange };
+  }
+
+  let weightSum = 0;
+  let wx = 0;
+  let wy = 0;
+  for (const cell of cellScores) {
+    wx += ((cell.col + 0.5) / GRID_COLS) * cell.score;
+    wy += ((cell.row + 0.5) / GRID_ROWS) * cell.score;
+    weightSum += cell.score;
+  }
+
+  return { x: wx / weightSum, y: wy / weightSum, maxChange };
 }
 
 /** Group per-frame change scores into active/dead segments. */
@@ -223,7 +239,7 @@ function clusterZoomKeyframes(raw: ZoomKeyframe[]): ZoomKeyframe[] {
     const duration = kfs[kfs.length - 1].timeSec - kfs[0].timeSec;
 
     // Only create zoom for clusters that last long enough (activity persists in one area)
-    if (duration >= ZOOM_HOLD_DURATION || kfs.length >= 4) {
+    if (duration >= ZOOM_HOLD_DURATION && kfs.length >= 4) {
       // Zoom IN at the start of the cluster
       result.push({
         timeSec: kfs[0].timeSec,
@@ -361,11 +377,11 @@ export async function analyzeVideo(
       zoomKeyframes.push({ timeSec: totalDuration, x: 0.5, y: 0.5, scale: 1.0 });
     }
 
-    // Insert zoom-out resets between clusters that are far apart in time (>3s gap)
+    // Insert zoom-out resets between clusters that are far apart in time (>5s gap)
     const withResets: ZoomKeyframe[] = [zoomKeyframes[0]];
     for (let i = 1; i < zoomKeyframes.length; i++) {
       const gap = zoomKeyframes[i].timeSec - zoomKeyframes[i - 1].timeSec;
-      if (gap > 3.0 && zoomKeyframes[i - 1].scale > 1.01 && zoomKeyframes[i].scale > 1.01) {
+      if (gap > 5.0 && zoomKeyframes[i - 1].scale > 1.01 && zoomKeyframes[i].scale > 1.01) {
         // Zoom out halfway through the gap, then zoom in for the next cluster
         const midTime = zoomKeyframes[i - 1].timeSec + gap * 0.3;
         const reZoomTime = zoomKeyframes[i].timeSec - gap * 0.3;

@@ -198,7 +198,7 @@ export async function exportWithEffects(
 
     // Damped zoom state to match the preview player's smooth transitions
     const damped = { x: 0.5, y: 0.5, scale: 1.0 };
-    const DAMPING = 0.08;
+    const DAMPING = 0.15;
 
     // Process each keep range
     for (let ri = 0; ri < keepRanges.length; ri++) {

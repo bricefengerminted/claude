@@ -103,7 +103,7 @@ export default function Player({
     const target = interpolateZoom(zoomKeyframes, video.currentTime);
     const d = dampedRef.current;
 
-    const damping = 0.08;
+    const damping = 0.15;
     d.x += (target.x - d.x) * damping;
     d.y += (target.y - d.y) * damping;
     d.scale += (target.scale - d.scale) * damping;
